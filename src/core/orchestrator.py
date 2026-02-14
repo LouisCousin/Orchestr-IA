@@ -256,7 +256,7 @@ class Orchestrator:
             return response.content.strip()
         except Exception as e:
             logger.warning(f"Impossible de générer le résumé pour {section.id}: {e}")
-            return content[:200] + "..."
+            return content[:200] + ("..." if len(content) > 200 else "")
 
     def _check_context_window(self, token_count: int, model: str) -> None:
         """Vérifie si le prompt ne dépasse pas la fenêtre de contexte."""

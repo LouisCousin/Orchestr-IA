@@ -213,10 +213,7 @@ def _render_view_plan(state):
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Valider le plan et continuer", type="primary", use_container_width=True):
-            for section in state.plan.sections:
-                if section.status == "pending":
-                    section.status = "pending"
-            state.current_step = "corpus"
+            state.current_step = "generation"
             _save_state(state)
             st.session_state.current_page = "generation"
             st.rerun()

@@ -306,6 +306,10 @@ class CorpusExtractor:
             chunk_size: Taille cible des blocs en caractères (~750 tokens).
             chunk_overlap: Chevauchement entre blocs en caractères (~75 tokens).
         """
+        if chunk_overlap >= chunk_size:
+            raise ValueError(
+                f"chunk_overlap ({chunk_overlap}) doit être inférieur à chunk_size ({chunk_size})"
+            )
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 

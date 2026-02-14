@@ -273,7 +273,7 @@ class ExportEngine:
                 continue
 
             # Détection de sous-titre en gras
-            if stripped.startswith("**") and stripped.endswith("**") and stripped.count("**") == 2:
+            if stripped.startswith("**") and stripped.endswith("**") and stripped.count("**") == 2 and len(stripped) > 4:
                 flush()
                 blocks.append(("bold_heading", stripped))
                 current_type = "paragraph"

@@ -86,11 +86,12 @@ def _extract_pdf_pdfplumber(path: Path) -> tuple[str, int]:
     import pdfplumber
     pages = []
     with pdfplumber.open(str(path)) as pdf:
+        page_count = len(pdf.pages)
         for page in pdf.pages:
             text = page.extract_text()
             if text:
                 pages.append(text)
-    return "\n\n".join(pages), len(pdf.pages)
+    return "\n\n".join(pages), page_count
 
 
 def _extract_pdf_pypdf2(path: Path) -> tuple[str, int]:
