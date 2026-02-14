@@ -77,6 +77,14 @@ def _render_new_project():
         # Charger la configuration du profil (d'abord le profil, puis les choix utilisateur)
         config = st.session_state.config.copy()
 
+        # Aplatir les paramètres de génération depuis la config par défaut
+        # (la config YAML les imbrique sous "generation:" et utilise "default_model")
+        gen = config.get("generation", {})
+        config.setdefault("model", config.get("default_model", "gpt-4o"))
+        config.setdefault("temperature", gen.get("temperature", 0.7))
+        config.setdefault("max_tokens", gen.get("max_tokens", 4096))
+        config.setdefault("number_of_passes", gen.get("number_of_passes", 1))
+
         if selected_profile != "Aucun (configuration manuelle)":
             selected = next((p for p in profiles if p["name"] == selected_profile), None)
             if selected:

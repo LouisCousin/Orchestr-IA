@@ -44,7 +44,7 @@ class AcquisitionReport:
 class CorpusAcquirer:
     """Module d'acquisition du corpus documentaire."""
 
-    SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".csv", ".txt", ".md", ".html", ".htm"}
+    SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".xls", ".csv", ".txt", ".md", ".html", ".htm"}
 
     def __init__(
         self,
