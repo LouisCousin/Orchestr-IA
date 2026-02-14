@@ -12,7 +12,7 @@ def render():
     st.title("Configuration")
     st.markdown("---")
 
-    if not st.session_state.project_state:
+    if not st.session_state.project_state or not st.session_state.get("current_project"):
         st.warning("Aucun projet actif. Créez ou ouvrez un projet depuis la page Accueil.")
         return
 
@@ -60,12 +60,19 @@ def _render_api_config():
             return
 
         provider = OpenAIProvider(api_key=key)
-        if provider.is_available():
+        if not provider.is_available():
+            st.error("Clé API invalide ou vide.")
+            return
+
+        with st.spinner("Test de connexion à l'API OpenAI..."):
+            success, message = provider.validate_connection()
+
+        if success:
             st.session_state.provider = provider
             st.session_state.cost_tracker = CostTracker()
             st.success("Connexion OpenAI validée !")
         else:
-            st.error("Clé API invalide ou vide.")
+            st.error(f"Échec de la connexion : {message}")
 
 
 def _render_model_config():

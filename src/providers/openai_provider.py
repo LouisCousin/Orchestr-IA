@@ -81,6 +81,21 @@ class OpenAIProvider(BaseProvider):
         """Vérifie si la clé API est configurée."""
         return bool(self._api_key and self._api_key != "sk-your-openai-api-key-here")
 
+    def validate_connection(self) -> tuple[bool, str]:
+        """Valide la connexion API en listant les modèles (appel gratuit).
+
+        Returns:
+            Tuple (success, message).
+        """
+        if not self.is_available():
+            return False, "Clé API manquante ou invalide."
+        try:
+            client = self._get_client()
+            client.models.list()
+            return True, "Connexion validée."
+        except Exception as e:
+            return False, f"Erreur de connexion : {e}"
+
     def get_default_model(self) -> str:
         return "gpt-4o"
 

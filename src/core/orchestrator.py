@@ -46,6 +46,7 @@ class ProjectState:
             "name": self.name,
             "user_id": self.user_id,
             "plan": self.plan.to_dict() if self.plan else None,
+            "corpus": self.corpus.to_dict() if self.corpus else None,
             "generated_sections": self.generated_sections,
             "section_summaries": self.section_summaries,
             "current_step": self.current_step,
@@ -72,6 +73,8 @@ class ProjectState:
         )
         if data.get("plan"):
             state.plan = NormalizedPlan.from_dict(data["plan"])
+        if data.get("corpus"):
+            state.corpus = StructuredCorpus.from_dict(data["corpus"])
         return state
 
 

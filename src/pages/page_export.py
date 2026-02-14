@@ -17,8 +17,8 @@ def render():
     st.title("Export du document")
     st.markdown("---")
 
-    if not st.session_state.project_state:
-        st.warning("Aucun projet actif.")
+    if not st.session_state.project_state or not st.session_state.get("current_project"):
+        st.warning("Aucun projet actif. Créez ou ouvrez un projet depuis la page Accueil.")
         return
 
     state = st.session_state.project_state

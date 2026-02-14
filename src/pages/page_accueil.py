@@ -79,6 +79,18 @@ def _render_new_project():
         config["target_pages"] = target_pages
         config["objective"] = objective
 
+        # Normaliser les clés de configuration (default_model → model, etc.)
+        if "default_model" in config and "model" not in config:
+            config["model"] = config["default_model"]
+        if "default_provider" not in config:
+            config["default_provider"] = "openai"
+
+        # Remonter les paramètres de génération au niveau racine
+        gen_config = config.get("generation", {})
+        for key in ("temperature", "max_tokens", "number_of_passes"):
+            if key not in config and key in gen_config:
+                config[key] = gen_config[key]
+
         if selected_profile != "Aucun (configuration manuelle)":
             selected = next((p for p in profiles if p["name"] == selected_profile), None)
             if selected:
@@ -154,6 +166,14 @@ def _load_project(project_id: str):
     try:
         data = load_json(state_path)
         state = ProjectState.from_dict(data)
+
+        # Normaliser les clés de configuration si nécessaire
+        config = state.config
+        if "default_model" in config and "model" not in config:
+            config["model"] = config["default_model"]
+        if "default_provider" not in config:
+            config["default_provider"] = "openai"
+
         st.session_state.project_state = state
         st.session_state.current_project = project_id
         st.session_state.current_page = "generation" if state.current_step == "generation" else "plan"

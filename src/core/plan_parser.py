@@ -73,9 +73,9 @@ class NormalizedPlan:
         )
         for s in data.get("sections", []):
             plan.sections.append(PlanSection(
-                id=s["id"],
-                title=s["title"],
-                level=s["level"],
+                id=s.get("id", ""),
+                title=s.get("title", ""),
+                level=s.get("level", 1),
                 parent_id=s.get("parent_id"),
                 description=s.get("description", ""),
                 page_budget=s.get("page_budget"),
@@ -118,19 +118,31 @@ class PlanParser:
         if not lines:
             return plan
 
-        # Détecter le titre du document (première ligne significative)
-        plan.title = lines[0] if lines else ""
-
         sections = self._detect_sections(lines)
         if sections:
             plan.sections = sections
+            # Le titre est la première ligne si elle n'a pas été détectée comme section
+            # Sinon, utiliser le titre de la première section de niveau 1
+            first_is_section = self._is_heading(lines[0])
+            if not first_is_section:
+                plan.title = lines[0]
+            elif plan.sections:
+                plan.title = plan.sections[0].title
         else:
             # Fallback : chaque ligne non vide est une section de niveau 1
             plan.sections = self._fallback_parse(lines)
+            plan.title = lines[0] if lines else ""
 
         self._assign_ids(plan)
         self._assign_parent_ids(plan)
         return plan
+
+    def _is_heading(self, line: str) -> bool:
+        """Vérifie si une ligne correspond à un pattern de titre."""
+        for pattern, _ in self.HEADING_PATTERNS:
+            if re.match(pattern, line.strip()):
+                return True
+        return False
 
     def _detect_sections(self, lines: list[str]) -> list[PlanSection]:
         """Détecte et parse les sections à partir des patterns de titres."""

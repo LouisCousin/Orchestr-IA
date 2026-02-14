@@ -6,8 +6,6 @@ from pathlib import Path
 from src.utils.config import ROOT_DIR
 from src.utils.file_utils import ensure_dir, save_json
 from src.core.plan_parser import PlanParser, NormalizedPlan
-from src.core.text_extractor import extract
-from src.core.checkpoint_manager import CheckpointManager, CheckpointConfig, CheckpointType
 
 
 PROJECTS_DIR = ROOT_DIR / "projects"
@@ -17,7 +15,7 @@ def render():
     st.title("Plan du document")
     st.markdown("---")
 
-    if not st.session_state.project_state:
+    if not st.session_state.project_state or not st.session_state.get("current_project"):
         st.warning("Aucun projet actif. Créez ou ouvrez un projet depuis la page Accueil.")
         return
 
@@ -57,9 +55,10 @@ def _render_import_plan(state):
         parser = PlanParser()
 
         if plan_file:
-            # Sauvegarder temporairement
             project_id = st.session_state.current_project
-            temp_path = PROJECTS_DIR / project_id / f"_temp_plan{Path(plan_file.name).suffix}"
+            project_dir = PROJECTS_DIR / project_id
+            ensure_dir(project_dir)
+            temp_path = project_dir / f"_temp_plan{Path(plan_file.name).suffix}"
             temp_path.write_bytes(plan_file.getvalue())
 
             try:
@@ -164,7 +163,7 @@ def _render_view_plan(state):
 
     # Affichage hiérarchique
     for section in plan.sections:
-        indent = "　" * (section.level - 1)  # Indentation visuelle
+        indent = "\u3000" * (section.level - 1)  # Indentation visuelle
         status_icon = {
             "pending": "⬜",
             "generating": "🔄",
@@ -211,9 +210,6 @@ def _render_view_plan(state):
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Valider le plan et continuer →", type="primary", use_container_width=True):
-            for section in state.plan.sections:
-                if section.status == "pending":
-                    section.status = "pending"  # Prêt pour génération
             state.current_step = "corpus"
             _save_state(state)
             st.session_state.current_page = "generation"
@@ -226,7 +222,7 @@ def _render_view_plan(state):
 
 def _save_state(state):
     """Sauvegarde l'état du projet."""
-    project_id = st.session_state.current_project
+    project_id = st.session_state.get("current_project")
     if project_id:
         state_path = PROJECTS_DIR / project_id / "state.json"
         save_json(state_path, state.to_dict())

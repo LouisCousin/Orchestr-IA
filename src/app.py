@@ -45,10 +45,15 @@ init_session_state()
 
 
 # --- Sidebar ---
+def _get_project_id() -> str | None:
+    """Retourne l'ID du projet actif ou None."""
+    return st.session_state.get("current_project")
+
+
 def render_sidebar():
     """Affiche la sidebar de navigation."""
     with st.sidebar:
-        st.image("https://via.placeholder.com/200x60?text=Orchestr'IA", width=200)
+        st.markdown("## Orchestr'IA")
         st.markdown("---")
 
         # Navigation

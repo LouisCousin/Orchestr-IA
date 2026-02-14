@@ -58,6 +58,24 @@ class StructuredCorpus:
             ],
         }
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "StructuredCorpus":
+        """Restaure les métadonnées du corpus (les chunks complets nécessitent une ré-extraction)."""
+        corpus = cls(
+            total_tokens=data.get("total_tokens", 0),
+            total_chunks=data.get("total_chunks", 0),
+            source_files=data.get("source_files", []),
+        )
+        for chunk_data in data.get("chunks", []):
+            corpus.chunks.append(CorpusChunk(
+                text=chunk_data.get("text", ""),
+                source_file=chunk_data.get("source_file", ""),
+                chunk_index=chunk_data.get("chunk_index", 0),
+                token_estimate=chunk_data.get("token_estimate", 0),
+                char_count=len(chunk_data.get("text", "")),
+            ))
+        return corpus
+
 
 class CorpusExtractor:
     """Extraction et structuration du corpus documentaire."""
@@ -77,7 +95,7 @@ class CorpusExtractor:
         files = sorted(corpus_dir.iterdir())
 
         for file_path in files:
-            if file_path.is_dir() or file_path.name.startswith(".") or file_path.suffix == ".json":
+            if file_path.is_dir() or file_path.name.startswith(".") or file_path.name.startswith("_") or file_path.suffix == ".json":
                 continue
 
             result = extract(file_path)

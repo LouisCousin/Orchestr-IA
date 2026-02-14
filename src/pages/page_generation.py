@@ -19,8 +19,8 @@ def render():
     st.title("Génération du document")
     st.markdown("---")
 
-    if not st.session_state.project_state:
-        st.warning("Aucun projet actif.")
+    if not st.session_state.project_state or not st.session_state.get("current_project"):
+        st.warning("Aucun projet actif. Créez ou ouvrez un projet depuis la page Accueil.")
         return
 
     state = st.session_state.project_state
@@ -66,19 +66,23 @@ def _render_launch(state, provider):
     st.subheader("Estimation des coûts")
 
     tracker = st.session_state.get("cost_tracker") or CostTracker()
+    st.session_state.cost_tracker = tracker
 
-    # Analyser le corpus si disponible
-    project_id = st.session_state.current_project
+    # Analyser le corpus si disponible (utiliser le cache si déjà extrait)
+    project_id = st.session_state.get("current_project")
+    if not project_id:
+        st.error("Aucun projet sélectionné.")
+        return
     corpus_dir = PROJECTS_DIR / project_id / "corpus"
     avg_corpus_tokens = 2000
 
-    if corpus_dir.exists() and any(corpus_dir.iterdir()):
+    if not state.corpus and corpus_dir.exists() and any(corpus_dir.iterdir()):
         extractor = CorpusExtractor()
-        corpus = extractor.extract_corpus(corpus_dir)
-        state.corpus = corpus
-        if corpus.total_chunks > 0:
-            avg_corpus_tokens = corpus.total_tokens // max(1, len(plan.sections))
-            st.info(f"Corpus : {corpus.total_chunks} blocs, ~{corpus.total_tokens:,} tokens")
+        state.corpus = extractor.extract_corpus(corpus_dir)
+
+    if state.corpus and state.corpus.total_chunks > 0:
+        avg_corpus_tokens = state.corpus.total_tokens // max(1, len(plan.sections))
+        st.info(f"Corpus : {state.corpus.total_chunks} blocs, ~{state.corpus.total_tokens:,} tokens")
 
     estimate = tracker.estimate_project_cost(
         section_count=len(plan.sections),
@@ -115,7 +119,10 @@ def _render_launch(state, provider):
 
 def _run_generation(state, provider, tracker):
     """Exécute la génération séquentielle."""
-    project_id = st.session_state.current_project
+    project_id = st.session_state.get("current_project")
+    if not project_id:
+        st.error("Aucun projet sélectionné.")
+        return
     project_dir = PROJECTS_DIR / project_id
 
     # Configurer les checkpoints
@@ -290,15 +297,17 @@ def _render_review(state):
                 if st.button(f"Sauvegarder les modifications", key=f"save_{section.id}"):
                     state.generated_sections[section.id] = edited
                     section.generated_content = edited
-                    project_id = st.session_state.current_project
-                    save_json(PROJECTS_DIR / project_id / "state.json", state.to_dict())
+                    project_id = st.session_state.get("current_project")
+                    if project_id:
+                        save_json(PROJECTS_DIR / project_id / "state.json", state.to_dict())
                     st.success(f"Section {section.id} mise à jour.")
 
     # Passage à l'export
     st.markdown("---")
     if st.button("Passer à l'export →", type="primary", use_container_width=True):
         state.current_step = "export"
-        project_id = st.session_state.current_project
-        save_json(PROJECTS_DIR / project_id / "state.json", state.to_dict())
+        project_id = st.session_state.get("current_project")
+        if project_id:
+            save_json(PROJECTS_DIR / project_id / "state.json", state.to_dict())
         st.session_state.current_page = "export"
         st.rerun()

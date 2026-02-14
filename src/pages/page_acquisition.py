@@ -19,7 +19,7 @@ def render():
     st.title("Acquisition du corpus")
     st.markdown("---")
 
-    if not st.session_state.project_state:
+    if not st.session_state.project_state or not st.session_state.get("current_project"):
         st.warning("Aucun projet actif. Créez ou ouvrez un projet depuis la page Accueil.")
         return
 
@@ -139,7 +139,11 @@ def _render_corpus_recap(corpus_dir: Path):
     """Récapitulatif du corpus acquis avec pré-analyse."""
     st.subheader("Corpus acquis")
 
-    files = sorted(f for f in corpus_dir.iterdir() if f.is_file() and not f.name.startswith(".") and f.suffix != ".json")
+    if not corpus_dir.exists():
+        st.info("Aucun document dans le corpus. Utilisez les onglets ci-dessus pour ajouter des documents.")
+        return
+
+    files = sorted(f for f in corpus_dir.iterdir() if f.is_file() and not f.name.startswith(".") and not f.name.startswith("_") and f.suffix != ".json")
 
     if not files:
         st.info("Aucun document dans le corpus. Utilisez les onglets ci-dessus pour ajouter des documents.")
