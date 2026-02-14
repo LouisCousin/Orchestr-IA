@@ -1,6 +1,7 @@
 """Génération du document DOCX final avec charte graphique configurable."""
 
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -187,30 +188,183 @@ class ExportEngine:
 
             content = generated_sections.get(section.id, "")
             if content:
-                # Découper en paragraphes et les ajouter
-                paragraphs = content.split("\n\n")
-                for para_text in paragraphs:
-                    para_text = para_text.strip()
-                    if not para_text:
-                        continue
-
-                    # Détecter les sous-titres dans le contenu généré
-                    if para_text.startswith("**") and para_text.endswith("**"):
-                        p = doc.add_paragraph()
-                        run = p.add_run(para_text.strip("*").strip())
-                        run.bold = True
-                    elif para_text.startswith("- ") or para_text.startswith("• "):
-                        # Listes à puces
-                        for line in para_text.split("\n"):
-                            line = line.strip().lstrip("-•").strip()
-                            if line:
-                                doc.add_paragraph(line, style="List Bullet")
-                    else:
-                        doc.add_paragraph(para_text)
+                self._add_content(doc, content)
             else:
                 p = doc.add_paragraph("[Section non générée]")
                 p.runs[0].font.italic = True
                 p.runs[0].font.color.rgb = RGBColor(180, 180, 180)
+
+    def _add_content(self, doc: Document, content: str) -> None:
+        """Parse le contenu markdown et l'ajoute au document DOCX."""
+        blocks = self._split_into_blocks(content)
+        for block_type, block_text in blocks:
+            if block_type == "table":
+                self._add_table(doc, block_text)
+            elif block_type == "bullet_list":
+                for line in block_text.split("\n"):
+                    line = line.strip().lstrip("-•").strip()
+                    if line:
+                        doc.add_paragraph(line, style="List Bullet")
+            elif block_type == "numbered_list":
+                for line in block_text.split("\n"):
+                    line = re.sub(r"^\d+[\.\)]\s*", "", line.strip())
+                    if line:
+                        doc.add_paragraph(line, style="List Number")
+            elif block_type == "bold_heading":
+                p = doc.add_paragraph()
+                run = p.add_run(block_text.strip("* ").strip())
+                run.bold = True
+            else:
+                self._add_rich_paragraph(doc, block_text)
+
+    def _split_into_blocks(self, content: str) -> list[tuple[str, str]]:
+        """Découpe le contenu en blocs typés (paragraph, table, bullet_list, etc.)."""
+        lines = content.split("\n")
+        blocks: list[tuple[str, str]] = []
+        current_lines: list[str] = []
+        current_type = "paragraph"
+
+        def flush():
+            text = "\n".join(current_lines).strip()
+            if text:
+                blocks.append((current_type, text))
+            current_lines.clear()
+
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+
+            # Détection d'un tableau markdown
+            if self._is_table_row(stripped) and i + 1 < len(lines) and self._is_separator_row(lines[i + 1].strip()):
+                flush()
+                table_lines = [stripped]
+                i += 1
+                while i < len(lines) and (self._is_table_row(lines[i].strip()) or self._is_separator_row(lines[i].strip())):
+                    table_lines.append(lines[i].strip())
+                    i += 1
+                blocks.append(("table", "\n".join(table_lines)))
+                current_type = "paragraph"
+                continue
+
+            # Ligne vide = séparateur de blocs
+            if not stripped:
+                flush()
+                current_type = "paragraph"
+                i += 1
+                continue
+
+            # Détection de liste à puces
+            if re.match(r"^[-•]\s+", stripped):
+                if current_type != "bullet_list":
+                    flush()
+                    current_type = "bullet_list"
+                current_lines.append(stripped)
+                i += 1
+                continue
+
+            # Détection de liste numérotée
+            if re.match(r"^\d+[\.\)]\s+", stripped):
+                if current_type != "numbered_list":
+                    flush()
+                    current_type = "numbered_list"
+                current_lines.append(stripped)
+                i += 1
+                continue
+
+            # Détection de sous-titre en gras
+            if stripped.startswith("**") and stripped.endswith("**") and stripped.count("**") == 2:
+                flush()
+                blocks.append(("bold_heading", stripped))
+                current_type = "paragraph"
+                i += 1
+                continue
+
+            # Texte normal
+            if current_type not in ("paragraph",):
+                flush()
+                current_type = "paragraph"
+            current_lines.append(line)
+            i += 1
+
+        flush()
+        return blocks
+
+    @staticmethod
+    def _is_table_row(line: str) -> bool:
+        """Vérifie si une ligne est une ligne de tableau markdown."""
+        return line.startswith("|") and line.endswith("|") and line.count("|") >= 3
+
+    @staticmethod
+    def _is_separator_row(line: str) -> bool:
+        """Vérifie si une ligne est un séparateur de tableau markdown (|---|---|)."""
+        return bool(re.match(r"^\|[\s\-:]+(\|[\s\-:]+)+\|$", line))
+
+    def _add_table(self, doc: Document, table_text: str) -> None:
+        """Parse un tableau markdown et l'ajoute comme tableau DOCX."""
+        lines = [l.strip() for l in table_text.split("\n") if l.strip()]
+
+        # Filtrer les lignes de séparation (|---|---|)
+        data_lines = [l for l in lines if not self._is_separator_row(l)]
+        if not data_lines:
+            return
+
+        # Parser les cellules
+        rows = []
+        for line in data_lines:
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            rows.append(cells)
+
+        if not rows:
+            return
+
+        num_cols = max(len(r) for r in rows)
+        # Normaliser le nombre de colonnes
+        for row in rows:
+            while len(row) < num_cols:
+                row.append("")
+
+        num_rows = len(rows)
+        table = doc.add_table(rows=num_rows, cols=num_cols)
+        table.style = "Table Grid"
+
+        for row_idx, row_data in enumerate(rows):
+            for col_idx, cell_text in enumerate(row_data):
+                cell = table.cell(row_idx, col_idx)
+                cell.text = ""
+                p = cell.paragraphs[0]
+                self._add_inline_formatting(p, cell_text)
+                # En-tête en gras
+                if row_idx == 0:
+                    for run in p.runs:
+                        run.bold = True
+                # Appliquer la police du document
+                for run in p.runs:
+                    run.font.name = self.styling["font_body"]
+                    run.font.size = Pt(self.styling["font_size_body"])
+
+        # Ajouter un paragraphe vide après le tableau pour l'espacement
+        doc.add_paragraph("")
+
+    def _add_rich_paragraph(self, doc: Document, text: str) -> None:
+        """Ajoute un paragraphe avec du formatage inline (gras, italique)."""
+        p = doc.add_paragraph()
+        self._add_inline_formatting(p, text)
+
+    @staticmethod
+    def _add_inline_formatting(paragraph, text: str) -> None:
+        """Ajoute du texte avec formatage inline (gras **..**, italique *..*)."""
+        # Pattern pour détecter **gras** et *italique*
+        parts = re.split(r"(\*\*[^*]+\*\*|\*[^*]+\*)", text)
+        for part in parts:
+            if part.startswith("**") and part.endswith("**"):
+                run = paragraph.add_run(part[2:-2])
+                run.bold = True
+            elif part.startswith("*") and part.endswith("*") and not part.startswith("**"):
+                run = paragraph.add_run(part[1:-1])
+                run.italic = True
+            elif part:
+                paragraph.add_run(part)
 
     def export_metadata_excel(
         self,
