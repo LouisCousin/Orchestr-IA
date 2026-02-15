@@ -1,6 +1,7 @@
 """Extraction de texte multi-format avec chaîne de fallback PDF.
 
-Supporte : PDF (pymupdf → pdfplumber → PyPDF2), DOCX, HTML, TXT/MD, Excel/CSV.
+Supporte : PDF (docling → pymupdf → pdfplumber → PyPDF2), DOCX, HTML, TXT/MD, Excel/CSV.
+Phase 2.5 : ajout de Docling comme extracteur PDF prioritaire avec structure sémantique.
 """
 
 import logging
@@ -32,6 +33,8 @@ class ExtractionResult:
     hash_text: str = ""
     error_message: Optional[str] = None
     metadata: dict = field(default_factory=dict)
+    structure: Optional[list[dict]] = None  # Phase 2.5 : sections détectées
+    # Chaque dict : {"text": str, "type": str, "page": int, "level": int}
 
 
 # --- Détection des bibliothèques disponibles ---
@@ -40,12 +43,20 @@ _AVAILABLE_PDF_LIBS: list[str] = []
 
 
 def _detect_pdf_libraries() -> list[str]:
-    """Détecte les bibliothèques PDF disponibles, ordonnées par priorité."""
+    """Détecte les bibliothèques PDF disponibles, ordonnées par priorité.
+
+    Phase 2.5 : Docling est prioritaire car il préserve la structure sémantique.
+    """
     global _AVAILABLE_PDF_LIBS
     if _AVAILABLE_PDF_LIBS:
         return _AVAILABLE_PDF_LIBS
 
     libs = []
+    try:
+        from docling.document_converter import DocumentConverter  # noqa: F401
+        libs.append("docling")
+    except ImportError:
+        pass
     try:
         import fitz  # noqa: F401
         libs.append("pymupdf")
@@ -68,6 +79,55 @@ def _detect_pdf_libraries() -> list[str]:
 
 
 # --- Extraction PDF par bibliothèque ---
+
+
+def _detect_heading_level(label: str) -> int:
+    """Détecte le niveau hiérarchique d'un élément Docling."""
+    label_lower = label.lower() if label else ""
+    if "title" in label_lower or "heading" in label_lower:
+        # Essayer d'extraire le niveau depuis le label (ex: "section_header_1")
+        for ch in reversed(label_lower):
+            if ch.isdigit():
+                return int(ch)
+        return 1
+    return 0
+
+
+def _extract_pdf_docling(path: Path) -> tuple[str, int, list[dict]]:
+    """Extraction PDF via Docling avec structure sémantique.
+
+    Returns:
+        Tuple (texte_complet, nombre_pages, structure_sémantique).
+    """
+    from docling.document_converter import DocumentConverter
+
+    converter = DocumentConverter()
+    result = converter.convert(str(path))
+    doc = result.document
+
+    sections = []
+    for item in doc.iterate_items():
+        text = item.text if hasattr(item, "text") else str(item)
+        if not text or not text.strip():
+            continue
+        label = item.label if hasattr(item, "label") else "paragraph"
+        page_no = None
+        if hasattr(item, "prov") and item.prov:
+            page_no = item.prov[0].page_no if hasattr(item.prov[0], "page_no") else None
+        sections.append({
+            "text": text,
+            "type": str(label),
+            "page": page_no,
+            "level": _detect_heading_level(str(label)),
+        })
+
+    full_text = "\n".join(s["text"] for s in sections)
+    page_count = doc.num_pages() if hasattr(doc, "num_pages") else max(
+        (s.get("page") or 0 for s in sections), default=1
+    )
+
+    return full_text, page_count, sections
+
 
 def _extract_pdf_pymupdf(path: Path) -> tuple[str, int]:
     """Extraction PDF via pymupdf (fitz)."""
@@ -115,7 +175,10 @@ _PDF_EXTRACTORS = {
 
 
 def extract_pdf(path: Path) -> ExtractionResult:
-    """Extrait le texte d'un PDF avec chaîne de fallback."""
+    """Extrait le texte d'un PDF avec chaîne de fallback.
+
+    Phase 2.5 : Docling est tenté en priorité pour obtenir la structure sémantique.
+    """
     available = _detect_pdf_libraries()
     if not available:
         return _make_result(
@@ -125,13 +188,24 @@ def extract_pdf(path: Path) -> ExtractionResult:
 
     for lib_name in available:
         try:
-            extractor = _PDF_EXTRACTORS[lib_name]
-            text, page_count = extractor(path)
-            if text.strip():
-                logger.info(f"PDF extrait avec {lib_name}: {path.name} ({page_count} pages)")
-                return _make_result(path, text=text, page_count=page_count, method=lib_name, status="success")
+            if lib_name == "docling":
+                # Docling retourne aussi la structure sémantique
+                text, page_count, structure = _extract_pdf_docling(path)
+                if text.strip():
+                    logger.info(f"PDF extrait avec docling: {path.name} ({page_count} pages, {len(structure)} éléments)")
+                    result = _make_result(path, text=text, page_count=page_count, method="docling", status="success")
+                    result.structure = structure
+                    return result
+                else:
+                    logger.warning(f"Extraction vide avec docling pour {path.name}, tentative suivante...")
             else:
-                logger.warning(f"Extraction vide avec {lib_name} pour {path.name}, tentative suivante...")
+                extractor = _PDF_EXTRACTORS[lib_name]
+                text, page_count = extractor(path)
+                if text.strip():
+                    logger.info(f"PDF extrait avec {lib_name}: {path.name} ({page_count} pages)")
+                    return _make_result(path, text=text, page_count=page_count, method=lib_name, status="success")
+                else:
+                    logger.warning(f"Extraction vide avec {lib_name} pour {path.name}, tentative suivante...")
         except Exception as e:
             logger.warning(f"Échec extraction PDF avec {lib_name} pour {path.name}: {e}")
             continue
@@ -145,17 +219,41 @@ def extract_pdf(path: Path) -> ExtractionResult:
 # --- Extraction DOCX ---
 
 def extract_docx(path: Path) -> ExtractionResult:
-    """Extrait le texte d'un fichier DOCX."""
+    """Extrait le texte d'un fichier DOCX avec structure sémantique (Phase 2.5)."""
     try:
         from docx import Document
         doc = Document(str(path))
         paragraphs = []
+        structure = []
         for para in doc.paragraphs:
             if para.text.strip():
                 paragraphs.append(para.text)
+                # Détecter le type et le niveau depuis le style
+                style_name = para.style.name if para.style else "Normal"
+                if style_name.startswith("Heading"):
+                    try:
+                        level = int(style_name.split()[-1])
+                    except (ValueError, IndexError):
+                        level = 1
+                    structure.append({
+                        "text": para.text,
+                        "type": "title",
+                        "page": None,
+                        "level": level,
+                    })
+                else:
+                    structure.append({
+                        "text": para.text,
+                        "type": "paragraph",
+                        "page": None,
+                        "level": 0,
+                    })
         text = "\n\n".join(paragraphs)
         page_count = max(1, len(text) // 3000)  # Estimation
-        return _make_result(path, text=text, page_count=page_count, method="python-docx", status="success")
+        result = _make_result(path, text=text, page_count=page_count, method="python-docx", status="success")
+        if structure:
+            result.structure = structure
+        return result
     except Exception as e:
         return _make_result(path, text="", page_count=0, method="python-docx", status="failed", error=str(e))
 
