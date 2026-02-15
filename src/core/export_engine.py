@@ -1,4 +1,7 @@
-"""Génération du document DOCX final avec charte graphique configurable."""
+"""Génération du document DOCX final avec charte graphique configurable.
+
+Phase 2.5 : détection des marqueurs {{NEEDS_SOURCE}} résiduels avant export.
+"""
 
 import logging
 import re
@@ -14,6 +17,47 @@ from src.core.plan_parser import NormalizedPlan, PlanSection
 from src.utils.file_utils import ensure_dir
 
 logger = logging.getLogger("orchestria")
+
+
+# ── Phase 2.5 : Détection des marqueurs {{NEEDS_SOURCE}} ──
+
+_NEEDS_SOURCE_PATTERN = re.compile(r'\{\{NEEDS_SOURCE:\s*(.+?)\}\}')
+
+
+def detect_needs_source_markers(text: str) -> list[dict]:
+    """Détecte les marqueurs {{NEEDS_SOURCE}} dans un texte.
+
+    Args:
+        text: Texte à analyser.
+
+    Returns:
+        Liste de dicts avec les clés 'full_match', 'description', 'position'.
+    """
+    markers = []
+    for match in _NEEDS_SOURCE_PATTERN.finditer(text):
+        markers.append({
+            "full_match": match.group(0),
+            "description": match.group(1).strip(),
+            "position": match.start(),
+        })
+    return markers
+
+
+def scan_all_sections_for_markers(generated_sections: dict) -> dict:
+    """Scanne toutes les sections générées pour détecter les marqueurs.
+
+    Args:
+        generated_sections: Dict {section_id: contenu}.
+
+    Returns:
+        Dict {section_id: list[marker_dict]} pour les sections contenant des marqueurs.
+    """
+    results = {}
+    for section_id, content in generated_sections.items():
+        markers = detect_needs_source_markers(content)
+        if markers:
+            results[section_id] = markers
+    return results
 
 
 DEFAULT_STYLING = {
@@ -50,8 +94,26 @@ class ExportEngine:
         generated_sections: dict,
         output_path: Path,
         project_name: str = "",
+        warn_on_markers: bool = True,
     ) -> Path:
-        """Génère le document DOCX complet."""
+        """Génère le document DOCX complet.
+
+        Phase 2.5 : détecte les marqueurs {{NEEDS_SOURCE}} résiduels.
+        """
+        # Phase 2.5 : Vérifier les marqueurs résiduels
+        if warn_on_markers:
+            markers_by_section = scan_all_sections_for_markers(generated_sections)
+            if markers_by_section:
+                total_markers = sum(len(m) for m in markers_by_section.values())
+                logger.warning(
+                    f"ATTENTION : {total_markers} marqueur(s) {{{{NEEDS_SOURCE}}}} "
+                    f"détecté(s) dans {len(markers_by_section)} section(s). "
+                    f"Le corpus est incomplet pour ces points."
+                )
+                for sid, markers in markers_by_section.items():
+                    for m in markers:
+                        logger.warning(f"  [{sid}] {m['description']}")
+
         ensure_dir(output_path.parent)
         doc = Document()
 

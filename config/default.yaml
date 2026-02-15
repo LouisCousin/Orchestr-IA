@@ -73,10 +73,36 @@ cost_estimation:
   enabled: true
   warn_threshold_usd: 5.0
 
-# Phase 2 — RAG (Retrieval-Augmented Generation)
+# ═══════════════════════════════════════════
+# Phase 2.5 — Pipeline RAG complet
+# ═══════════════════════════════════════════
+
 rag:
-  top_k: 7
+  # ── Chunking sémantique ──
+  chunking:
+    strategy: "semantic"           # "semantic" | "fixed"
+    max_chunk_tokens: 800
+    min_chunk_tokens: 100
+    overlap_sentences: 2
+
+  # ── Embeddings ──
+  embedding_mode: "local"          # "local" | "api"
+  local_model: "intfloat/multilingual-e5-large"
+  models_cache_dir: "./models"
+
+  # ── Recherche ──
+  top_k: 10                        # Blocs après reranking (Phase 2 : 7)
   relevance_threshold: 0.3
+  initial_candidates: 20           # Blocs retournés par ChromaDB avant reranking
+  cosine_distance: "cosine"
+
+  # ── Reranking ──
+  reranking_enabled: true          # true | false
+  reranker_model: "cross-encoder/ms-marco-MiniLM-L-12-v2"
+
+  # ── Filtrage ──
+  filter_by_language: true         # Filtrer par langue du projet
+  filter_by_doc_type: false        # Filtrer par type de document
 
 # Phase 2 — Génération conditionnelle
 conditional_generation:
@@ -85,8 +111,21 @@ conditional_generation:
   insufficient_threshold: 0.3
   min_relevant_blocks: 3
 
-# Phase 2 — Mode batch
+# ── Mode batch ──
 batch:
-  enabled: false
-  polling_interval: 30  # secondes
-  timeout: 3600  # secondes (60 minutes)
+  enabled: true
+  poll_interval_seconds: 30
+  timeout_seconds: 3600            # 60 minutes
+  fallback_to_realtime: true       # Si batch échoue, repasser en temps réel
+
+# ── Anti-hallucination (Phase 2.5) ──
+anti_hallucination:
+  enabled: true                    # Injecter le bloc dans les prompts
+  needs_source_marker: "{{NEEDS_SOURCE: %s}}"
+  warn_on_export: true             # Alerter si marqueurs résiduels
+
+# ── Liaison plan-corpus (Phase 2.5) ──
+plan_corpus_linking:
+  enabled: true                    # Activer la pré-analyse du corpus
+  max_intro_chunks_per_doc: 3      # Chunks à extraire par document
+  max_documents_for_theme: 30      # Limite pour l'analyse thématique

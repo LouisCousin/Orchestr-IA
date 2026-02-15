@@ -1,4 +1,7 @@
-"""Génération et gestion des prompts pour le pipeline."""
+"""Génération et gestion des prompts pour le pipeline.
+
+Phase 2.5 : ajout des garde-fous anti-hallucination et du marqueur {{NEEDS_SOURCE}}.
+"""
 
 import logging
 from typing import Optional
@@ -9,6 +12,31 @@ from src.core.corpus_extractor import CorpusChunk
 logger = logging.getLogger("orchestria")
 
 
+# Phase 2.5 : Bloc anti-hallucination injecté dans chaque prompt de génération
+ANTI_HALLUCINATION_BLOCK = """
+═══ RÈGLES DE FIABILITÉ (NON NÉGOCIABLES) ═══
+
+1. SOURCES EXCLUSIVES : Tu ne peux utiliser QUE les blocs de corpus
+   fournis ci-dessous (entre les balises --- SOURCE --- et --- FIN SOURCE ---).
+   Ne fabrique JAMAIS d'information absente du corpus.
+
+2. MARQUEUR D'INSUFFISANCE : Si tu veux développer un point mais
+   qu'aucun bloc de corpus ne le soutient, écris EXACTEMENT :
+   {{NEEDS_SOURCE: [description du point à sourcer]}}
+   Cela signale à l'utilisateur qu'il doit compléter le corpus.
+   NE REMPLACE PAS ce marqueur par du contenu inventé.
+
+3. ATTRIBUTION : Quand tu utilises une information d'un bloc source,
+   mentionne la source (ex: "Selon [Source 3]..." ou "D'après le
+   document X..."). Cela facilite la vérification.
+
+4. TRANSPARENCE : Si le corpus est insuffisant pour une section
+   complète, écris une section plus courte plutôt que de compléter
+   avec des informations non sourcées.
+═══ FIN DES RÈGLES ═══
+"""
+
+
 SYSTEM_PROMPT_TEMPLATE = """Tu es un rédacteur professionnel expert. Tu rédiges des documents structurés, précis et de haute qualité.
 
 Règles générales :
@@ -17,7 +45,7 @@ Règles générales :
 - Respecte strictement la structure et les consignes fournies.
 - Base-toi exclusivement sur le corpus fourni pour les informations factuelles.
 - Ne fabrique pas de données ou de statistiques.
-{persistent_instructions}"""
+{persistent_instructions}{anti_hallucination}"""
 
 SECTION_PROMPT_TEMPLATE = """## Objectif du document
 {objective}
@@ -91,17 +119,29 @@ Retourne uniquement la version améliorée, sans commentaires ni explications.
 
 
 class PromptEngine:
-    """Génère les prompts pour chaque étape du pipeline."""
+    """Génère les prompts pour chaque étape du pipeline.
 
-    def __init__(self, persistent_instructions: str = ""):
+    Phase 2.5 : injection systématique du bloc anti-hallucination.
+    """
+
+    def __init__(self, persistent_instructions: str = "", anti_hallucination_enabled: bool = True):
         self.persistent_instructions = persistent_instructions
+        self.anti_hallucination_enabled = anti_hallucination_enabled
 
     def build_system_prompt(self) -> str:
-        """Construit le prompt système avec les instructions persistantes."""
+        """Construit le prompt système avec instructions persistantes et garde-fous."""
         instructions = ""
         if self.persistent_instructions:
             instructions = f"\n\nInstructions spécifiques au projet :\n{self.persistent_instructions}"
-        return SYSTEM_PROMPT_TEMPLATE.format(persistent_instructions=instructions)
+
+        anti_hallucination = ""
+        if self.anti_hallucination_enabled:
+            anti_hallucination = f"\n{ANTI_HALLUCINATION_BLOCK}"
+
+        return SYSTEM_PROMPT_TEMPLATE.format(
+            persistent_instructions=instructions,
+            anti_hallucination=anti_hallucination,
+        )
 
     def build_section_prompt(
         self,

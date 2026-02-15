@@ -1,4 +1,4 @@
-# Orchestr'IA - Phase 1 + Phase 2 Dependencies
+# Orchestr'IA - Phase 1 + Phase 2 + Phase 2.5 Dependencies
 
 # Interface
 streamlit>=1.30.0
@@ -9,7 +9,8 @@ anthropic>=0.39.0
 google-genai>=1.0.0
 tiktoken>=0.6.0
 
-# PDF extraction (fallback chain)
+# PDF extraction (fallback chain: docling → pymupdf → pdfplumber → PyPDF2)
+docling>=2.0  # Phase 2.5: extracteur PDF prioritaire (optionnel mais recommandé)
 pymupdf>=1.23.0
 pdfplumber>=0.10.0
 PyPDF2>=3.0.0
@@ -27,12 +28,21 @@ lxml>=5.0.0
 # RAG / Vector database (Phase 2)
 chromadb>=0.5.0
 
+# Phase 2.5: Embeddings locaux et reranking
+sentence-transformers>=3.0
+# Note : installe aussi torch si pas déjà présent
+# Pour une installation CPU-only plus légère :
+# pip install torch --index-url https://download.pytorch.org/whl/cpu
+
 # Configuration
 pyyaml>=6.0.0
 python-dotenv>=1.0.0
 
 # Hashing / deduplication
 # (hashlib is stdlib)
+
+# Metadata store
+# (sqlite3 is stdlib)
 
 # Testing
 pytest>=8.0.0
