@@ -1,0 +1,28 @@
+# Éthique de l'intelligence artificielle
+
+## Biais algorithmiques
+
+Les biais algorithmiques surviennent lorsque les systèmes d'IA reproduisent ou amplifient
+des discriminations présentes dans les données d'entraînement. Ces biais peuvent toucher
+le recrutement automatisé, l'octroi de crédit, la justice prédictive et la reconnaissance
+faciale. L'audit régulier des modèles est essentiel pour détecter et corriger ces biais.
+
+## Transparence et explicabilité
+
+L'explicabilité des modèles d'IA (XAI) est un enjeu majeur pour la confiance des
+utilisateurs et la conformité réglementaire. Les techniques comme SHAP, LIME et les
+cartes d'attention permettent de comprendre les décisions des modèles. Le AI Act européen
+impose des exigences de transparence pour les systèmes d'IA à haut risque.
+
+## Gouvernance de l'IA
+
+La gouvernance de l'IA définit les cadres organisationnels et les processus pour le
+développement et le déploiement responsable de l'IA. Elle comprend la définition de
+principes éthiques, la mise en place de comités d'éthique, l'évaluation des risques
+et la documentation des décisions algorithmiques.
+
+## Réglementation internationale
+
+Le AI Act de l'Union européenne, adopté en 2024, classe les systèmes d'IA selon leur
+niveau de risque (inacceptable, élevé, limité, minimal) et impose des obligations
+proportionnées. D'autres régulations émergent aux États-Unis, en Chine et au Canada.

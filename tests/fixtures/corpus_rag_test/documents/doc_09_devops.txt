@@ -1,0 +1,27 @@
+# DevOps et intégration continue
+
+## Principes DevOps
+
+DevOps est une culture et un ensemble de pratiques qui unifient le développement logiciel
+et les opérations IT. Les principes fondamentaux sont : l'automatisation, la collaboration,
+le feedback continu, l'amélioration continue et le partage de responsabilités.
+
+## CI/CD Pipeline
+
+L'intégration continue (CI) automatise la compilation, les tests et l'analyse de code
+à chaque commit. Le déploiement continu (CD) étend l'automatisation jusqu'à la mise en
+production. Les outils courants incluent Jenkins, GitLab CI, GitHub Actions et CircleCI.
+
+## Infrastructure as Code
+
+L'Infrastructure as Code (IaC) permet de gérer l'infrastructure via des fichiers de
+configuration versionnés. Terraform, Ansible, Pulumi et CloudFormation sont les outils
+les plus utilisés. L'IaC garantit la reproductibilité, la traçabilité et la cohérence
+des environnements.
+
+## Observabilité
+
+L'observabilité repose sur trois piliers : les métriques (Prometheus, Grafana),
+les logs (ELK Stack, Loki) et les traces distribuées (Jaeger, Zipkin). Le monitoring
+proactif permet de détecter les incidents avant qu'ils n'impactent les utilisateurs
+et d'optimiser les performances des applications.

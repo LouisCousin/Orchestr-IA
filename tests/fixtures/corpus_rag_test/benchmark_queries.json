@@ -1,0 +1,125 @@
+{
+  "description": "Benchmark RAG Phase 2.5 : 20 requêtes avec documents attendus pour valider precision@5 >= 0.6",
+  "queries": [
+    {
+      "id": "q01",
+      "query": "Quels sont les principaux modèles de langage basés sur l'architecture Transformer ?",
+      "expected_docs": ["doc_01_intelligence_artificielle.txt"],
+      "expected_section": "Transformers et modèles de langage"
+    },
+    {
+      "id": "q02",
+      "query": "Différences entre IaaS, PaaS et SaaS dans le cloud",
+      "expected_docs": ["doc_02_cloud_computing.txt"],
+      "expected_section": "Définition et modèles de service"
+    },
+    {
+      "id": "q03",
+      "query": "Comment fonctionne le modèle Zero Trust en cybersécurité ?",
+      "expected_docs": ["doc_03_cybersecurite.txt"],
+      "expected_section": "Zero Trust"
+    },
+    {
+      "id": "q04",
+      "query": "Rôles et cérémonies dans la méthodologie Scrum",
+      "expected_docs": ["doc_04_gestion_projet.txt"],
+      "expected_section": "Scrum en pratique"
+    },
+    {
+      "id": "q05",
+      "query": "Quels outils utiliser pour le MLOps et le déploiement de modèles ?",
+      "expected_docs": ["doc_05_data_science.txt"],
+      "expected_section": "MLOps et déploiement"
+    },
+    {
+      "id": "q06",
+      "query": "Impact environnemental des data centers et du numérique",
+      "expected_docs": ["doc_06_developpement_durable.txt"],
+      "expected_section": "Impact environnemental du numérique"
+    },
+    {
+      "id": "q07",
+      "query": "Technologies motrices de la transformation digitale des entreprises",
+      "expected_docs": ["doc_07_transformation_digitale.txt"],
+      "expected_section": "Technologies clés"
+    },
+    {
+      "id": "q08",
+      "query": "Biais algorithmiques dans les systèmes d'IA et solutions",
+      "expected_docs": ["doc_08_ethique_ia.txt"],
+      "expected_section": "Biais algorithmiques"
+    },
+    {
+      "id": "q09",
+      "query": "Infrastructure as Code avec Terraform et Ansible",
+      "expected_docs": ["doc_09_devops.txt"],
+      "expected_section": "Infrastructure as Code"
+    },
+    {
+      "id": "q10",
+      "query": "Smart contracts et finance décentralisée sur Ethereum",
+      "expected_docs": ["doc_10_blockchain.txt"],
+      "expected_section": "Smart contracts"
+    },
+    {
+      "id": "q11",
+      "query": "Réglementation européenne sur l'intelligence artificielle (AI Act)",
+      "expected_docs": ["doc_08_ethique_ia.txt"],
+      "expected_section": "Réglementation internationale"
+    },
+    {
+      "id": "q12",
+      "query": "Parts de marché AWS Azure et Google Cloud",
+      "expected_docs": ["doc_02_cloud_computing.txt"],
+      "expected_section": "Fournisseurs principaux"
+    },
+    {
+      "id": "q13",
+      "query": "Ransomware et menaces cyber actuelles",
+      "expected_docs": ["doc_03_cybersecurite.txt"],
+      "expected_section": "Panorama des menaces"
+    },
+    {
+      "id": "q14",
+      "query": "KPI et indicateurs de performance en gestion de projet agile",
+      "expected_docs": ["doc_04_gestion_projet.txt"],
+      "expected_section": "Métriques de performance"
+    },
+    {
+      "id": "q15",
+      "query": "Écoconception logicielle et Green IT",
+      "expected_docs": ["doc_06_developpement_durable.txt"],
+      "expected_section": "Green IT et écoconception"
+    },
+    {
+      "id": "q16",
+      "query": "Conduite du changement dans la transformation numérique",
+      "expected_docs": ["doc_07_transformation_digitale.txt"],
+      "expected_section": "Conduite du changement"
+    },
+    {
+      "id": "q17",
+      "query": "Architecture microservices avec Docker et Kubernetes",
+      "expected_docs": ["doc_02_cloud_computing.txt", "doc_09_devops.txt"],
+      "expected_section": "Architecture microservices"
+    },
+    {
+      "id": "q18",
+      "query": "Analyse exploratoire des données avec Python Pandas",
+      "expected_docs": ["doc_05_data_science.txt"],
+      "expected_section": "Exploration et visualisation"
+    },
+    {
+      "id": "q19",
+      "query": "Traçabilité supply chain et blockchain en entreprise",
+      "expected_docs": ["doc_10_blockchain.txt"],
+      "expected_section": "Cas d'usage entreprise"
+    },
+    {
+      "id": "q20",
+      "query": "CI/CD pipeline et déploiement continu avec Jenkins et GitLab",
+      "expected_docs": ["doc_09_devops.txt"],
+      "expected_section": "CI/CD Pipeline"
+    }
+  ]
+}

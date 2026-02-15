@@ -1,0 +1,29 @@
+# Blockchain et technologies distribuées
+
+## Principes fondamentaux
+
+La blockchain est un registre distribué et immuable qui enregistre les transactions
+de manière chronologique. Chaque bloc contient un hash cryptographique du bloc précédent,
+créant une chaîne inviolable. Les mécanismes de consensus (Proof of Work, Proof of Stake)
+garantissent l'intégrité du réseau sans autorité centrale.
+
+## Smart contracts
+
+Les smart contracts sont des programmes auto-exécutants stockés sur la blockchain.
+Ethereum a popularisé ce concept avec son langage Solidity. Les smart contracts
+permettent d'automatiser des accords sans intermédiaire : assurances paramétriques,
+supply chain, vote électronique et finance décentralisée (DeFi).
+
+## Cas d'usage entreprise
+
+Les applications blockchain en entreprise incluent : la traçabilité de la chaîne
+d'approvisionnement (IBM Food Trust), l'identité numérique décentralisée,
+les paiements transfrontaliers, la tokenisation d'actifs réels et la gestion
+des droits de propriété intellectuelle.
+
+## Limites et défis
+
+Les défis de la blockchain comprennent la scalabilité (nombre de transactions par
+seconde limité), la consommation énergétique (pour les blockchains Proof of Work),
+la complexité réglementaire et l'interopérabilité entre différentes chaînes.
+Les solutions Layer 2 et les sidechains visent à résoudre ces limitations.

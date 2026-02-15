@@ -1,6 +1,7 @@
 """Orchestration séquentielle du pipeline de génération.
 
 Phase 2 : mode agentique, passes multiples, mode batch, RAG.
+Phase 2.5 : chunking sémantique, plan-corpus linking, anti-hallucination.
 """
 
 import json
@@ -15,6 +16,11 @@ from src.core.corpus_extractor import CorpusExtractor, StructuredCorpus
 from src.core.cost_tracker import CostTracker
 from src.core.plan_parser import NormalizedPlan, PlanSection
 from src.core.prompt_engine import PromptEngine
+from src.core.semantic_chunker import chunk_document
+from src.core.metadata_store import MetadataStore, DocumentMetadata
+from src.core.plan_corpus_linker import (
+    link_plan_to_corpus, format_plan_context_for_prompt, PLAN_PROMPT_WITH_CORPUS,
+)
 from src.providers.base import BaseProvider
 from src.utils.file_utils import ensure_dir, save_json, load_json
 from src.utils.logger import ActivityLog
@@ -110,9 +116,11 @@ class Orchestrator:
         self.activity_log = activity_log or ActivityLog()
         self.config = config or {}
         self.prompt_engine = PromptEngine(
-            persistent_instructions=self.config.get("persistent_instructions", "")
+            persistent_instructions=self.config.get("persistent_instructions", ""),
+            anti_hallucination_enabled=self.config.get("anti_hallucination", {}).get("enabled", True),
         )
         self.rag_engine = None
+        self.metadata_store = None
         self.conditional_generator = None
         self.state: Optional[ProjectState] = None
 
@@ -128,9 +136,16 @@ class Orchestrator:
                 persist_dir=persist_dir,
                 top_k=self.config.get("rag_top_k", 7),
                 relevance_threshold=self.config.get("rag_relevance_threshold", 0.3),
+                config=self.config,
             )
         except ImportError:
             logger.warning("ChromaDB non disponible, RAG désactivé")
+
+    def _init_metadata_store(self) -> None:
+        """Initialise le MetadataStore SQLite si nécessaire."""
+        if self.metadata_store is not None:
+            return
+        self.metadata_store = MetadataStore(str(self.project_dir))
 
     def _init_conditional_generator(self) -> None:
         """Initialise le générateur conditionnel si nécessaire."""
@@ -165,6 +180,9 @@ class Orchestrator:
     def index_corpus_rag(self) -> int:
         """Indexe le corpus dans ChromaDB pour le RAG.
 
+        Phase 2.5 : utilise le chunking sémantique et le MetadataStore.
+        Fallback vers l'indexation Phase 2 si le chunking sémantique échoue.
+
         Returns:
             Nombre de blocs indexés.
         """
@@ -172,6 +190,51 @@ class Orchestrator:
         if not self.rag_engine or not self.state or not self.state.corpus:
             return 0
 
+        # Phase 2.5 : chunking sémantique + MetadataStore
+        try:
+            self._init_metadata_store()
+            chunks_by_doc = {}
+
+            for ext in self.state.corpus.extractions:
+                if ext.status == "failed" or not ext.text.strip():
+                    continue
+
+                doc_id = ext.hash_text or ext.source_filename
+                # Chunk sémantique via structure si disponible
+                chunks = chunk_document(ext, doc_id=doc_id)
+                if chunks:
+                    chunks_by_doc[doc_id] = chunks
+
+                # Enregistrer les métadonnées du document dans SQLite
+                doc_meta = DocumentMetadata(
+                    doc_id=doc_id,
+                    filepath=ext.source_filename,
+                    filename=ext.source_filename,
+                    page_count=ext.page_count,
+                    char_count=ext.char_count,
+                    word_count=ext.word_count,
+                    token_count=ext.word_count * 4 // 3,
+                    extraction_method=ext.extraction_method,
+                    extraction_status=ext.status,
+                    hash_binary=ext.hash_binary,
+                    hash_textual=ext.hash_text,
+                )
+                self.metadata_store.add_document(doc_meta)
+
+            if chunks_by_doc:
+                count = self.rag_engine.index_corpus_semantic(
+                    chunks_by_doc, metadata_store=self.metadata_store,
+                )
+                self.activity_log.info(
+                    f"Corpus indexé (sémantique) : {count} chunks depuis "
+                    f"{len(chunks_by_doc)} documents"
+                )
+                return count
+
+        except Exception as e:
+            logger.warning(f"Chunking sémantique échoué, fallback Phase 2 : {e}")
+
+        # Fallback Phase 2 : chunking fixe
         extractions = []
         for ext in self.state.corpus.extractions:
             extractions.append({
@@ -181,7 +244,7 @@ class Orchestrator:
             })
 
         count = self.rag_engine.index_corpus(extractions)
-        self.activity_log.info(f"Corpus indexé dans ChromaDB : {count} blocs")
+        self.activity_log.info(f"Corpus indexé dans ChromaDB (fallback) : {count} blocs")
         return count
 
     def generate_all_sections(self, pass_number: int = 1) -> dict:
@@ -464,19 +527,52 @@ class Orchestrator:
     ) -> NormalizedPlan:
         """Génère un plan à partir d'un objectif en langage naturel.
 
+        Phase 2.5 : utilise plan_corpus_linker pour analyser le corpus
+        (thèmes, couverture) et injecter le contexte dans le prompt.
+        Fallback vers le digest basique si le linking échoue.
+
         Args:
             objective: Description de l'objectif du document.
             target_pages: Nombre de pages cible.
-            corpus: Corpus structuré optionnel. Si fourni, des extraits
-                représentatifs de chaque document seront injectés dans le
-                prompt pour guider la structure du plan.
+            corpus: Corpus structuré optionnel.
         """
         from src.core.plan_parser import PlanParser
 
-        corpus_digest = corpus.get_corpus_digest() if corpus else None
-        prompt = self.prompt_engine.build_plan_generation_prompt(
-            objective, target_pages, corpus_digest=corpus_digest,
-        )
+        plan_context = None
+        use_plan_linking = self.config.get("plan_corpus_linking", {}).get("enabled", True)
+
+        # Phase 2.5 : plan-corpus linking si RAG indexé et MetadataStore disponible
+        if use_plan_linking and corpus and self.rag_engine and self.metadata_store:
+            try:
+                plan_context = link_plan_to_corpus(
+                    objective=objective,
+                    metadata_store=self.metadata_store,
+                    collection=self.rag_engine.collection,
+                    config=self.config,
+                    provider=self.provider,
+                )
+                self.activity_log.info(
+                    f"Plan-corpus linking : {len(plan_context.themes)} thèmes identifiés"
+                )
+            except Exception as e:
+                logger.warning(f"Plan-corpus linking échoué, fallback digest : {e}")
+                plan_context = None
+
+        if plan_context and plan_context.themes:
+            # Utiliser le prompt enrichi Phase 2.5
+            corpus_context = format_plan_context_for_prompt(plan_context)
+            prompt = PLAN_PROMPT_WITH_CORPUS.format(
+                objective=objective,
+                corpus_context=corpus_context,
+                target_pages=target_pages or 10,
+            )
+        else:
+            # Fallback Phase 2 : digest basique
+            corpus_digest = corpus.get_corpus_digest() if corpus else None
+            prompt = self.prompt_engine.build_plan_generation_prompt(
+                objective, target_pages, corpus_digest=corpus_digest,
+            )
+
         system_prompt = self.prompt_engine.build_system_prompt()
 
         response = self.provider.generate(
@@ -502,5 +598,10 @@ class Orchestrator:
 
         if target_pages:
             parser.distribute_page_budget(plan, target_pages)
+
+        # Stocker le contexte de couverture pour affichage dans page_plan
+        if plan_context:
+            if self.state:
+                self.state.rag_coverage["_plan_context"] = plan_context.to_dict()
 
         return plan

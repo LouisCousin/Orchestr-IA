@@ -1,0 +1,26 @@
+# Gestion de projet agile
+
+## Méthodologies agiles
+
+Les méthodologies agiles, issues du Manifeste Agile de 2001, privilégient les interactions
+humaines, les logiciels fonctionnels, la collaboration client et l'adaptation au changement.
+Les frameworks les plus utilisés sont Scrum, Kanban et SAFe (Scaled Agile Framework).
+
+## Scrum en pratique
+
+Scrum organise le travail en sprints de 2 à 4 semaines. Les rôles clés sont le Product
+Owner (responsable du backlog), le Scrum Master (facilitateur) et l'équipe de développement.
+Les cérémonies incluent le sprint planning, le daily standup, la sprint review et la
+rétrospective.
+
+## Métriques de performance
+
+Les indicateurs clés de performance (KPI) en gestion de projet agile comprennent :
+la vélocité de l'équipe, le burndown chart, le lead time (délai de livraison),
+le cycle time et le taux de satisfaction client (NPS).
+
+## Gestion des risques
+
+La gestion des risques en mode agile est continue et itérative. Les risques sont
+identifiés lors des rétrospectives et des revues de sprint. L'approche fail-fast
+permet de détecter rapidement les problèmes et d'ajuster la trajectoire du projet.

@@ -166,6 +166,14 @@ def _render_view_plan(state):
 
     st.markdown("---")
 
+    # Phase 2.5 : Affichage des scores de couverture corpus
+    plan_context_data = state.rag_coverage.get("_plan_context") if state.rag_coverage else None
+    coverage_map = plan_context_data.get("coverage", {}) if plan_context_data else {}
+
+    if plan_context_data and plan_context_data.get("themes"):
+        _render_coverage_summary(plan_context_data)
+        st.markdown("---")
+
     # Affichage hiérarchique
     for section in plan.sections:
         indent = "\u3000" * (section.level - 1)
@@ -178,7 +186,15 @@ def _render_view_plan(state):
         }.get(section.status, "")
 
         budget_str = f" ({section.page_budget} p.)" if section.page_budget else ""
-        st.markdown(f"{indent}{status_icon} **{section.id}** {section.title}{budget_str}")
+
+        # Phase 2.5 : indicateur de couverture corpus par section
+        coverage_icon = _get_section_coverage_icon(section.title, coverage_map)
+        coverage_suffix = f" {coverage_icon}" if coverage_icon else ""
+
+        st.markdown(
+            f"{indent}{status_icon} **{section.id}** {section.title}"
+            f"{budget_str}{coverage_suffix}"
+        )
 
         if section.description:
             st.caption(f"{indent}  _{section.description}_")
@@ -223,6 +239,73 @@ def _render_view_plan(state):
         if st.button("Retour", use_container_width=True):
             st.session_state.current_page = "acquisition"
             st.rerun()
+
+
+def _render_coverage_summary(plan_context_data: dict):
+    """Affiche le résumé de couverture corpus (Phase 2.5)."""
+    themes = plan_context_data.get("themes", [])
+    coverage = plan_context_data.get("coverage", {})
+    summary = plan_context_data.get("corpus_summary", {})
+
+    st.subheader("Couverture corpus")
+    st.caption(
+        f"{summary.get('total_documents', 0)} documents | "
+        f"~{summary.get('total_tokens', 0)} tokens"
+    )
+
+    for theme in themes:
+        cov = coverage.get(theme, {})
+        avg_score = cov.get("avg_score", 0)
+        nb_chunks = cov.get("nb_chunks", 0)
+
+        if avg_score >= 0.5:
+            icon = "\\u2705"  # check mark
+            label = "Fort"
+        elif avg_score >= 0.3:
+            icon = "\\u26A0\\uFE0F"  # warning
+            label = "Partiel"
+        else:
+            icon = "\\u274C"  # cross
+            label = "Faible"
+
+        st.markdown(f"  {icon} **{theme}** — {label} (score: {avg_score:.2f}, {nb_chunks} blocs)")
+
+
+def _get_section_coverage_icon(section_title: str, coverage_map: dict) -> str:
+    """Retourne l'icone de couverture pour une section du plan.
+
+    Cherche le meilleur match entre le titre de section et les thèmes du corpus.
+    """
+    if not coverage_map:
+        return ""
+
+    best_score = 0.0
+    section_lower = section_title.lower()
+
+    for theme, cov in coverage_map.items():
+        theme_lower = theme.lower()
+        # Match exact ou partiel
+        if theme_lower in section_lower or section_lower in theme_lower:
+            score = cov.get("avg_score", 0)
+            if score > best_score:
+                best_score = score
+        # Match par mots-clés communs
+        theme_words = set(theme_lower.split())
+        section_words = set(section_lower.split())
+        common = theme_words & section_words
+        if len(common) >= 2:
+            score = cov.get("avg_score", 0)
+            if score > best_score:
+                best_score = score
+
+    if best_score <= 0:
+        return ""
+    elif best_score >= 0.5:
+        return "\\u2705"
+    elif best_score >= 0.3:
+        return "\\u26A0\\uFE0F"
+    else:
+        return "\\u274C"
 
 
 def _save_state(state):

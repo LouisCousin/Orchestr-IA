@@ -1,0 +1,28 @@
+# Intelligence artificielle et apprentissage automatique
+
+## Introduction
+
+L'intelligence artificielle (IA) représente un domaine en pleine expansion qui transforme
+de nombreux secteurs économiques. Les techniques d'apprentissage automatique, en particulier
+le deep learning, ont permis des avancées considérables dans le traitement du langage naturel,
+la vision par ordinateur et la robotique.
+
+## Apprentissage supervisé
+
+L'apprentissage supervisé est la technique la plus utilisée en IA industrielle. Le modèle
+apprend à partir de données étiquetées pour prédire des résultats sur de nouvelles données.
+Les algorithmes classiques incluent les forêts aléatoires, les machines à vecteurs de support
+et les réseaux de neurones profonds.
+
+## Transformers et modèles de langage
+
+L'architecture Transformer, introduite par Vaswani et al. en 2017, a révolutionné le
+traitement du langage naturel. Les modèles comme BERT, GPT et T5 utilisent des mécanismes
+d'attention pour capturer les dépendances à longue portée dans les séquences textuelles.
+Ces modèles sont pré-entraînés sur de vastes corpus et affinés pour des tâches spécifiques.
+
+## Applications industrielles
+
+Les applications de l'IA dans l'industrie sont nombreuses : maintenance prédictive,
+contrôle qualité automatisé, optimisation de la chaîne logistique, personnalisation
+des recommandations et assistance à la décision médicale.

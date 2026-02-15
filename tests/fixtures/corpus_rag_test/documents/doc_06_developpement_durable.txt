@@ -1,0 +1,27 @@
+# Développement durable et numérique responsable
+
+## Impact environnemental du numérique
+
+Le secteur numérique représente environ 4% des émissions mondiales de gaz à effet de serre,
+un chiffre en augmentation de 6% par an. Les data centers consomment à eux seuls 1% de
+l'électricité mondiale. L'empreinte carbone d'un e-mail avec pièce jointe est estimée à
+environ 35g de CO2.
+
+## Green IT et écoconception
+
+Le Green IT vise à réduire l'impact environnemental du numérique. L'écoconception logicielle
+optimise le code pour consommer moins de ressources : réduction des requêtes réseau,
+compression des images, mise en cache efficace et choix d'algorithmes sobres en énergie.
+
+## Économie circulaire et matériel
+
+L'économie circulaire appliquée au numérique comprend le reconditionnement des équipements,
+le recyclage des composants électroniques et l'allongement de la durée de vie des appareils.
+La directive européenne sur le droit à la réparation renforce ces pratiques.
+
+## Reporting ESG
+
+Les entreprises sont de plus en plus tenues de publier des rapports ESG (Environnement,
+Social, Gouvernance). La CSRD (Corporate Sustainability Reporting Directive) impose
+aux grandes entreprises européennes un reporting détaillé de leurs impacts environnementaux
+et sociaux, incluant l'empreinte numérique.

@@ -1,0 +1,29 @@
+# Cloud computing et infrastructure moderne
+
+## Définition et modèles de service
+
+Le cloud computing désigne la fourniture de ressources informatiques à la demande via Internet.
+Les trois modèles principaux sont :
+- IaaS (Infrastructure as a Service) : machines virtuelles, stockage, réseaux
+- PaaS (Platform as a Service) : environnements de développement et déploiement
+- SaaS (Software as a Service) : applications accessibles par navigateur
+
+## Fournisseurs principaux
+
+Les trois principaux fournisseurs de cloud public sont Amazon Web Services (AWS),
+Microsoft Azure et Google Cloud Platform (GCP). AWS détient environ 32% du marché,
+suivi par Azure avec 23% et GCP avec 10%.
+
+## Architecture microservices
+
+L'architecture microservices décompose une application en services indépendants,
+chacun déployable séparément. Cette approche facilite la scalabilité horizontale
+et la résilience. Les conteneurs Docker et l'orchestrateur Kubernetes sont les
+technologies clés de cette architecture.
+
+## Sécurité cloud
+
+La sécurité dans le cloud repose sur le modèle de responsabilité partagée :
+le fournisseur sécurise l'infrastructure, le client sécurise ses données et
+configurations. Les mesures incluent le chiffrement, la gestion des identités
+(IAM), et la surveillance continue des accès.

@@ -1,0 +1,30 @@
+# Cybersécurité : menaces et protections
+
+## Panorama des menaces
+
+Les cybermenaces évoluent constamment. Les principales catégories incluent :
+les ransomwares (rançongiciels), le phishing (hameçonnage), les attaques DDoS
+(déni de service distribué) et les APT (Advanced Persistent Threats).
+En 2023, les ransomwares ont causé des pertes estimées à 20 milliards de dollars
+au niveau mondial.
+
+## Cadre réglementaire
+
+Le RGPD (Règlement Général sur la Protection des Données) impose aux entreprises
+européennes des obligations strictes en matière de protection des données personnelles.
+La directive NIS2, entrée en vigueur en 2024, étend les exigences de cybersécurité
+à davantage de secteurs d'activité.
+
+## Stratégies de défense
+
+Une stratégie de défense en profondeur combine plusieurs couches de sécurité :
+pare-feu nouvelle génération, systèmes de détection d'intrusion (IDS/IPS),
+segmentation réseau, authentification multifacteur (MFA) et formation des
+utilisateurs aux bonnes pratiques.
+
+## Zero Trust
+
+Le modèle Zero Trust repose sur le principe "ne jamais faire confiance, toujours
+vérifier". Chaque accès est authentifié et autorisé, qu'il provienne de l'intérieur
+ou de l'extérieur du réseau. Ce modèle est particulièrement pertinent avec la
+généralisation du télétravail.

@@ -1,0 +1,28 @@
+# Data science et analyse de données
+
+## Pipeline de données
+
+Un pipeline de data science comprend les étapes suivantes : collecte des données,
+nettoyage et préparation, exploration et visualisation, modélisation, évaluation
+et déploiement. Chaque étape nécessite des outils et compétences spécifiques.
+
+## Exploration et visualisation
+
+L'analyse exploratoire des données (EDA) permet de comprendre la structure et les
+distributions des données avant la modélisation. Les bibliothèques Python comme
+Pandas, Matplotlib et Seaborn sont les outils standards. Les techniques incluent
+les statistiques descriptives, les corrélations et les visualisations interactives.
+
+## Modélisation prédictive
+
+Les modèles prédictifs les plus courants sont la régression linéaire et logistique,
+les arbres de décision, les forêts aléatoires, le gradient boosting (XGBoost, LightGBM)
+et les réseaux de neurones. Le choix du modèle dépend de la nature du problème
+(classification, régression, clustering) et du volume de données.
+
+## MLOps et déploiement
+
+MLOps combine les pratiques de DevOps avec le machine learning pour automatiser
+le cycle de vie des modèles. Les plateformes comme MLflow, Kubeflow et Vertex AI
+permettent le suivi des expériences, le versioning des modèles et le déploiement
+en production avec monitoring continu.
