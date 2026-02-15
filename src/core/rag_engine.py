@@ -147,7 +147,7 @@ class RAGEngine:
 
             chunks = self._split_text(text)
             for i, chunk_text in enumerate(chunks):
-                doc_id = f"{source}_chunk_{i:04d}"
+                doc_id = f"{source}_chunk_{chunk_index:04d}"
                 documents.append(chunk_text)
                 metadatas.append({
                     "source_file": source,
@@ -334,6 +334,9 @@ class RAGEngine:
         else:
             chunks = chunks[:top_k]
             scores = scores[:top_k]
+
+        # Recalculate total_tokens for the final set of chunks
+        total_tokens = sum(c.get("token_estimate", len(c["text"]) // 4) for c in chunks)
 
         num_relevant = sum(1 for s in scores if s >= self.relevance_threshold)
         avg_score = sum(scores) / len(scores) if scores else 0.0

@@ -170,12 +170,24 @@ class MetadataStore:
         rows = conn.execute("SELECT * FROM documents ORDER BY filename").fetchall()
         return [self._row_to_document(r) for r in rows]
 
+    _VALID_COLUMNS = frozenset({
+        "filepath", "filename", "title", "authors", "year", "language",
+        "doc_type", "page_count", "token_count", "char_count", "word_count",
+        "extraction_method", "extraction_status", "hash_binary", "hash_textual",
+        "dedup_status", "dedup_original_id", "journal", "volume", "issue",
+        "pages_range", "doi", "publisher", "apa_reference", "updated_at",
+    })
+
     def update_document(self, doc_id: str, **fields) -> None:
         """Met à jour les champs spécifiés d'un document."""
         if not fields:
             return
         conn = self._get_conn()
         fields["updated_at"] = datetime.now().isoformat()
+        # Validate column names to prevent SQL injection
+        invalid_keys = set(fields.keys()) - self._VALID_COLUMNS
+        if invalid_keys:
+            raise ValueError(f"Invalid column names: {invalid_keys}")
         set_clause = ", ".join(f"{k} = ?" for k in fields)
         values = list(fields.values()) + [doc_id]
         conn.execute(f"UPDATE documents SET {set_clause} WHERE doc_id = ?", values)
@@ -225,6 +237,8 @@ class MetadataStore:
 
         for key, value in filters.items():
             if value is not None:
+                if key not in self._VALID_COLUMNS and key != "doc_id":
+                    raise ValueError(f"Invalid filter column: {key}")
                 conditions.append(f"{key} = ?")
                 params.append(value)
 

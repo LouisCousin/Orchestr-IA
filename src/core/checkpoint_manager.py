@@ -45,7 +45,8 @@ class CheckpointConfig:
     final_review: bool = True
 
     def is_enabled(self, checkpoint_type: str) -> bool:
-        return getattr(self, checkpoint_type, False)
+        key = checkpoint_type.value if hasattr(checkpoint_type, "value") else checkpoint_type
+        return getattr(self, key, False)
 
     def to_dict(self) -> dict:
         return {

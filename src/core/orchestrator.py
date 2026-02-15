@@ -351,10 +351,7 @@ class Orchestrator:
                 section.status = "failed"
                 self.activity_log.error(f"Erreur génération section {section.id}: {e}", section=section.id)
                 logger.error(f"Erreur génération {section.id}: {e}")
-                if self.is_agentic:
-                    continue  # En mode agentique, on continue
-                else:
-                    continue  # En mode manuel aussi, mais pourrait être interrompu
+                continue
 
             # Checkpoint après génération (mode manuel uniquement)
             if not self.is_agentic and self.checkpoint_mgr.should_pause(CheckpointType.GENERATION):

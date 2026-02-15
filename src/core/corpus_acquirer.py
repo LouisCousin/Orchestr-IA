@@ -144,7 +144,6 @@ class CorpusAcquirer:
     def _download_from_url(self, url: str) -> AcquisitionStatus:
         """Stratégie de téléchargement en cascade pour une URL."""
         import requests
-        from bs4 import BeautifulSoup
 
         session = self._get_session()
         timeout = (self.connection_timeout, self.read_timeout)
@@ -184,6 +183,7 @@ class CorpusAcquirer:
 
         # Chercher des liens PDF dans la page HTML
         if "text/html" in actual_content_type:
+            from bs4 import BeautifulSoup
             soup = BeautifulSoup(resp.text, "html.parser")
             for link in soup.find_all("a", href=True):
                 href = link["href"]
