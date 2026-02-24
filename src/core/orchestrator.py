@@ -179,6 +179,14 @@ class Orchestrator:
             enabled=self.config.get("conditional_generation_enabled", True),
         )
 
+    def _get_model(self) -> str:
+        """Récupère le modèle depuis la config avec warning si absent."""
+        model = self.config.get("model")
+        if not model:
+            logger.warning("Clé 'model' absente de la config, fallback sur le modèle par défaut du provider")
+            model = self.provider.get_default_model()
+        return model
+
     @property
     def is_agentic(self) -> bool:
         """Vérifie si le mode agentique est activé."""
@@ -324,7 +332,7 @@ class Orchestrator:
             raise RuntimeError("Projet non initialisé ou plan manquant")
 
         plan = self.state.plan
-        model = self.config.get("model", self.provider.get_default_model())
+        model = self._get_model()
         temperature = self.config.get("temperature", 0.7)
         max_tokens = self.config.get("max_tokens", 4096)
         target_pages = self.config.get("target_pages")
@@ -340,8 +348,6 @@ class Orchestrator:
         else:
             self.activity_log.info("Démarrage de la génération séquentielle (brouillon)")
             sections_to_generate = [s for s in plan.sections if s.status != "generated"]
-
-        system_prompt = self.prompt_engine.build_system_prompt()
 
         # Initialiser RAG et génération conditionnelle si corpus disponible
         use_rag = self.state.corpus and self.rag_engine is not None
@@ -402,6 +408,11 @@ class Orchestrator:
                         self.activity_log.warning(assessment.message, section=section.id)
             elif self.state.corpus:
                 corpus_chunks = self.state.corpus.get_chunks_for_section(section.title)
+
+            # Construire le system_prompt avec has_corpus adapté à cette section
+            system_prompt = self.prompt_engine.build_system_prompt(
+                has_corpus=bool(corpus_chunks)
+            )
 
             # Construire le prompt
             if is_refinement:
@@ -658,14 +669,14 @@ class Orchestrator:
         response = self.provider.generate(
             prompt=prompt,
             system_prompt=system_prompt,
-            model=self.config.get("model", self.provider.get_default_model()),
+            model=self._get_model(),
             temperature=0.7,
             max_tokens=2000,
         )
 
         self.cost_tracker.record(
             section_id="plan",
-            model=self.config.get("model", self.provider.get_default_model()),
+            model=self._get_model(),
             provider=self.provider.name,
             input_tokens=response.input_tokens,
             output_tokens=response.output_tokens,

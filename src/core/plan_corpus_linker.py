@@ -193,7 +193,10 @@ Retourne une liste de 5 à 15 thèmes, un par ligne, du plus important au moins 
 Chaque thème doit être une phrase courte (3-8 mots) décrivant un sujet couvert par le corpus.
 Retourne UNIQUEMENT la liste, sans numérotation, sans commentaires."""
 
-    model = config.get("model", provider.get_default_model())
+    model = config.get("model")
+    if not model:
+        logger.warning("Clé 'model' absente de la config, fallback sur le modèle par défaut du provider")
+        model = provider.get_default_model()
     response = provider.generate(
         prompt=prompt,
         system_prompt="Tu es un analyste documentaire expert.",

@@ -295,8 +295,8 @@ class PromptEngine:
 
         if tier == "full_excerpts":
             parts = []
-            for i, entry in enumerate(entries, 1):
-                parts.append(f"[Document {i} : {entry['source_file']}]\n{entry['text']}")
+            for entry in entries:
+                parts.append(f"[Document : {entry['source_file']}]\n{entry['text']}")
             corpus_text = "\n\n---\n\n".join(parts)
             return (
                 f"\n═══ EXTRAITS DU CORPUS DOCUMENTAIRE DISPONIBLE ═══\n"
@@ -336,8 +336,8 @@ class PromptEngine:
             excerpts_text = "\n\n---\n\n".join(parts)
             return (
                 f"\n═══ CORPUS DISPONIBLE ({num_docs} documents) ═══\n\n"
-                f"─── Liste des sources et thématiques ───\n{files_listing}\n\n"
-                f"─── Extraits représentatifs (échantillon de {len(entries)} documents) ───\n\n"
+                f"## Liste des sources et thématiques\n{files_listing}\n\n"
+                f"## Extraits représentatifs (échantillon de {len(entries)} documents)\n\n"
                 f"{excerpts_text}\n\n"
             )
 
