@@ -20,12 +20,10 @@ else
 fi
 
 # Vérifier les dépendances
-$PYTHON -c "import streamlit" 2>/dev/null
-if [ $? -ne 0 ]; then
-    echo "Installation des dépendances..."
-    $PYTHON -m pip install -r requirements.txt
-    echo
-fi
+echo "Vérification des dépendances..."
+$PYTHON -m pip install -r requirements.txt --quiet
+echo "Dépendances OK."
+echo
 
 echo "Démarrage du serveur Streamlit..."
 echo "L'application va s'ouvrir dans votre navigateur."

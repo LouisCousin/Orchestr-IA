@@ -25,12 +25,10 @@ if %errorlevel%==0 (
 cd /d "%~dp0"
 
 :: Verifier que les dependances sont installees
-%PYTHON% -c "import streamlit" >nul 2>nul
-if %errorlevel% neq 0 (
-    echo Installation des dependances...
-    %PYTHON% -m pip install -r requirements.txt
-    echo.
-)
+echo Verification des dependances...
+%PYTHON% -m pip install -r requirements.txt --quiet
+echo Dependances OK.
+echo.
 
 :: Lancer l'application
 echo Demarrage du serveur Streamlit...
