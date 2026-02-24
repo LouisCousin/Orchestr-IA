@@ -231,12 +231,36 @@ class Orchestrator:
                 for ext in self.state.corpus.extractions:
                     doc_id = ext.source_filename
 
+                    # Extraire auteurs et année depuis les métadonnées
+                    authors = None
+                    year = None
+                    if ext.metadata:
+                        authors = ext.metadata.get("author") or ext.metadata.get("authors")
+                        # Tenter d'extraire l'année depuis les métadonnées ou le nom de fichier
+                        date_str = ext.metadata.get("creation_date") or ext.metadata.get("date")
+                        if date_str:
+                            import re as _re
+                            year_match = _re.search(r'(19|20)\d{2}', str(date_str))
+                            if year_match:
+                                year = int(year_match.group())
+
+                    # Construire la référence APA si possible
+                    title = ext.metadata.get("title") if ext.metadata else None
+                    apa_reference = None
+                    if authors and year:
+                        apa_reference = f"{authors} ({year})"
+                    elif authors and title:
+                        apa_reference = f"{authors} — {title}"
+
                     # Enregistrer le document dans SQLite
                     doc_meta = DocumentMetadata(
                         doc_id=doc_id,
                         filepath=str(ext.source_filename),
                         filename=ext.source_filename,
-                        title=ext.metadata.get("title") if ext.metadata else None,
+                        title=title,
+                        authors=json.dumps([authors]) if authors else None,
+                        year=year,
+                        apa_reference=apa_reference,
                         page_count=ext.page_count,
                         token_count=ext.word_count,
                         char_count=ext.char_count,

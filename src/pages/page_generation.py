@@ -349,7 +349,9 @@ def _run_generation(state, provider, tracker):
                     extra_instruction=extra_instruction,
                 )
 
-            system_prompt = orchestrator.prompt_engine.build_system_prompt()
+            system_prompt = orchestrator.prompt_engine.build_system_prompt(
+                has_corpus=bool(corpus_chunks)
+            )
 
             try:
                 response = provider.generate(

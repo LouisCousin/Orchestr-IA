@@ -136,6 +136,24 @@ def _extract_pdf_docling(path: Path) -> tuple[str, int, list[dict]]:
     return full_text, page_count, sections, title
 
 
+def _extract_pdf_metadata(path: Path) -> dict:
+    """Extrait les métadonnées (auteur, date) d'un PDF via PyPDF2."""
+    metadata = {}
+    try:
+        import PyPDF2
+        with open(path, "rb") as f:
+            reader = PyPDF2.PdfReader(f)
+            info = reader.metadata
+            if info:
+                if info.author:
+                    metadata["author"] = info.author
+                if getattr(info, "creation_date", None):
+                    metadata["creation_date"] = str(info.creation_date)
+    except Exception:
+        pass
+    return metadata
+
+
 def _extract_pdf_pymupdf(path: Path) -> tuple[str, int]:
     """Extraction PDF via pymupdf (fitz)."""
     import fitz
@@ -193,6 +211,9 @@ def extract_pdf(path: Path) -> ExtractionResult:
             status="failed", error="Aucune bibliothèque PDF disponible"
         )
 
+    # Extraire les métadonnées (auteur, date) indépendamment du texte
+    pdf_meta = _extract_pdf_metadata(path)
+
     for lib_name in available:
         try:
             if lib_name == "docling":
@@ -204,6 +225,8 @@ def extract_pdf(path: Path) -> ExtractionResult:
                     result.structure = structure
                     if title:
                         result.metadata["title"] = title
+                    # Enrichir avec les métadonnées PDF
+                    result.metadata.update(pdf_meta)
                     return result
                 else:
                     logger.warning(f"Extraction vide avec docling pour {path.name}, tentative suivante...")
@@ -212,7 +235,10 @@ def extract_pdf(path: Path) -> ExtractionResult:
                 text, page_count = extractor(path)
                 if text.strip():
                     logger.info(f"PDF extrait avec {lib_name}: {path.name} ({page_count} pages)")
-                    return _make_result(path, text=text, page_count=page_count, method=lib_name, status="success")
+                    result = _make_result(path, text=text, page_count=page_count, method=lib_name, status="success")
+                    # Enrichir avec les métadonnées PDF
+                    result.metadata.update(pdf_meta)
+                    return result
                 else:
                     logger.warning(f"Extraction vide avec {lib_name} pour {path.name}, tentative suivante...")
         except Exception as e:
@@ -276,6 +302,14 @@ def extract_docx(path: Path) -> ExtractionResult:
             result.structure = structure
         if title:
             result.metadata["title"] = title
+        # Extraire auteur depuis les propriétés du document DOCX
+        try:
+            if doc.core_properties.author:
+                result.metadata["author"] = doc.core_properties.author
+            if doc.core_properties.created:
+                result.metadata["creation_date"] = str(doc.core_properties.created)
+        except Exception:
+            pass
         return result
     except Exception as e:
         return _make_result(path, text="", page_count=0, method="python-docx", status="failed", error=str(e))
@@ -307,6 +341,12 @@ def extract_html(path_or_text: Path | str) -> ExtractionResult:
             if h1_tag:
                 title = h1_tag.get_text(strip=True)
 
+        # Extract author from <meta name="author"> tag
+        author = None
+        author_tag = soup.find("meta", attrs={"name": "author"})
+        if author_tag and author_tag.get("content"):
+            author = author_tag["content"].strip()
+
         for tag in soup(["script", "style", "nav", "header", "footer", "aside", "noscript"]):
             tag.decompose()
 
@@ -320,6 +360,8 @@ def extract_html(path_or_text: Path | str) -> ExtractionResult:
             result = _make_result(source_path, text=text, page_count=page_count, method="beautifulsoup", status="success")
             if title:
                 result.metadata["title"] = title
+            if author:
+                result.metadata["author"] = author
             return result
         else:
             return ExtractionResult(

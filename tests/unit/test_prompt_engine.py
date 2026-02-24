@@ -202,6 +202,113 @@ class TestBuildPlanGenerationPrompt:
         assert "Tiens compte" not in prompt
 
 
+class TestBuildSystemPromptHasCorpus:
+    def test_system_prompt_with_corpus(self, engine):
+        """Anti-hallucination inclus quand has_corpus=True."""
+        prompt = engine.build_system_prompt(has_corpus=True)
+        assert "RÈGLES DE FIABILITÉ" in prompt
+
+    def test_system_prompt_without_corpus(self, engine):
+        """Anti-hallucination exclu quand has_corpus=False (CA3-4)."""
+        prompt = engine.build_system_prompt(has_corpus=False)
+        assert "RÈGLES DE FIABILITÉ" not in prompt
+
+
+class TestNoMarkdownInTemplates:
+    """CA2-3 : Les templates de prompt ne contiennent plus aucun ##."""
+
+    def test_section_template_no_markdown_headers(self, engine, sample_plan, sample_chunks):
+        section = sample_plan.sections[0]
+        prompt = engine.build_section_prompt(
+            section=section, plan=sample_plan,
+            corpus_chunks=sample_chunks, previous_summaries=[],
+        )
+        # Le prompt ne doit pas contenir de ## (en-tête markdown)
+        for line in prompt.split("\n"):
+            stripped = line.strip()
+            assert not stripped.startswith("##"), f"Found markdown header: {stripped}"
+
+    def test_refinement_template_no_markdown_headers(self, engine, sample_plan, sample_chunks):
+        section = sample_plan.sections[0]
+        prompt = engine.build_refinement_prompt(
+            section=section, plan=sample_plan,
+            draft_content="Brouillon test",
+            corpus_chunks=sample_chunks, previous_summaries=[],
+        )
+        for line in prompt.split("\n"):
+            stripped = line.strip()
+            assert not stripped.startswith("##"), f"Found markdown header: {stripped}"
+
+    def test_plan_template_no_markdown_headers(self, engine):
+        prompt = engine.build_plan_generation_prompt("Objectif test", 10)
+        for line in prompt.split("\n"):
+            stripped = line.strip()
+            assert not stripped.startswith("##"), f"Found markdown header: {stripped}"
+
+
+class TestCorpusChunksGroupedFormats:
+    """CA3-6, CA3-7 : Regroupement des chunks (objets et dicts)."""
+
+    def test_grouped_by_source_objects(self, engine):
+        """CA3-6 : chunks sous forme d'objets regroupés par source."""
+        chunks = [
+            CorpusChunk(text="Extrait 1 du doc A", source_file="docA.pdf", chunk_index=0),
+            CorpusChunk(text="Extrait 2 du doc A", source_file="docA.pdf", chunk_index=1),
+            CorpusChunk(text="Extrait 1 du doc B", source_file="docB.pdf", chunk_index=0),
+        ]
+        result = PromptEngine._format_corpus_chunks_grouped(chunks)
+        # Deux groupes
+        assert "[Document : docA.pdf]" in result
+        assert "[Document : docB.pdf]" in result
+        assert "Extrait 1 du doc A" in result
+        assert "Extrait 2 du doc A" in result
+
+    def test_grouped_by_source_dicts(self, engine):
+        """CA3-7 : chunks sous forme de dicts."""
+        chunks = [
+            {"text": "Texte chunk 1", "source_file": "rapport.pdf"},
+            {"text": "Texte chunk 2", "source_file": "rapport.pdf"},
+            {"text": "Texte chunk 3", "source_file": "etude.pdf"},
+        ]
+        result = PromptEngine._format_corpus_chunks_grouped(chunks)
+        assert "[Document : rapport.pdf]" in result
+        assert "[Document : etude.pdf]" in result
+
+    def test_grouped_mixed_formats(self, engine):
+        """CA3-7 : chunks hétérogènes (mélange objets et dicts)."""
+        chunks = [
+            CorpusChunk(text="Objet chunk", source_file="doc1.pdf", chunk_index=0),
+            {"text": "Dict chunk", "source_file": "doc2.pdf"},
+        ]
+        result = PromptEngine._format_corpus_chunks_grouped(chunks)
+        assert "[Document : doc1.pdf]" in result
+        assert "[Document : doc2.pdf]" in result
+
+    def test_no_source_numbered_references(self, engine, sample_plan, sample_chunks):
+        """Le prompt ne doit contenir aucun [Source N]."""
+        section = sample_plan.sections[0]
+        prompt = engine.build_section_prompt(
+            section=section, plan=sample_plan,
+            corpus_chunks=sample_chunks, previous_summaries=[],
+        )
+        import re
+        matches = re.findall(r'\[Source\s*\d+\]', prompt)
+        assert len(matches) == 0, f"Found [Source N] references: {matches}"
+
+
+class TestCorpusEmptyFallback:
+    """CA3-4 : Sans corpus, le prompt ne contient pas de contradiction."""
+
+    def test_no_corpus_mentions_needs_source(self, engine, sample_plan):
+        section = sample_plan.sections[0]
+        prompt = engine.build_section_prompt(
+            section=section, plan=sample_plan,
+            corpus_chunks=[], previous_summaries=[],
+        )
+        assert "NEEDS_SOURCE" in prompt
+        assert "connaissances générales" in prompt.lower()
+
+
 class TestBuildSummaryPrompt:
     def test_summary_prompt(self, engine):
         prompt = engine.build_summary_prompt("Introduction", "Le contenu de la section introduction.")

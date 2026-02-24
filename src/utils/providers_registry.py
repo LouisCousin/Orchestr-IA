@@ -1,5 +1,8 @@
 """Registre centralisé des fournisseurs IA et de leurs modèles."""
 
+from typing import Optional
+
+
 PROVIDERS_INFO = {
     "openai": {
         "label": "OpenAI",
@@ -34,3 +37,25 @@ def get_default_model(provider_name: str) -> str:
     """Retourne le modèle par défaut d'un fournisseur."""
     info = PROVIDERS_INFO.get(provider_name, {})
     return info.get("default_model", "gpt-4o")
+
+
+def create_provider(provider_name: str, api_key: str) -> Optional["BaseProvider"]:
+    """Crée une instance du fournisseur sélectionné.
+
+    Args:
+        provider_name: Nom du fournisseur ("openai", "anthropic", "google").
+        api_key: Clé API pour le fournisseur.
+
+    Returns:
+        Instance du provider ou None si le nom est inconnu.
+    """
+    if provider_name == "openai":
+        from src.providers.openai_provider import OpenAIProvider
+        return OpenAIProvider(api_key=api_key)
+    elif provider_name == "anthropic":
+        from src.providers.anthropic_provider import AnthropicProvider
+        return AnthropicProvider(api_key=api_key)
+    elif provider_name == "google":
+        from src.providers.gemini_provider import GeminiProvider
+        return GeminiProvider(api_key=api_key)
+    return None

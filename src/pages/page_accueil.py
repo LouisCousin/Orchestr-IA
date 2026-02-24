@@ -1,6 +1,7 @@
 """Page d'accueil — Création et gestion de projets."""
 
 import copy
+import os
 import streamlit as st
 from pathlib import Path
 from datetime import datetime
@@ -9,6 +10,8 @@ from src.utils.config import ROOT_DIR
 from src.utils.file_utils import ensure_dir, save_json, load_json, sanitize_filename
 from src.core.profile_manager import ProfileManager
 from src.core.orchestrator import ProjectState
+from src.utils.providers_registry import PROVIDERS_INFO, create_provider
+from src.core.cost_tracker import CostTracker
 
 
 PROJECTS_DIR = ROOT_DIR / "projects"
@@ -158,7 +161,12 @@ def _render_existing_projects():
 
 
 def _load_project(project_id: str):
-    """Charge un projet existant dans la session."""
+    """Charge un projet existant dans la session.
+
+    Tente de restaurer le provider IA automatiquement à partir de la clé API
+    en variable d'environnement. Si la restauration échoue, redirige vers
+    la page Configuration avec un message explicatif.
+    """
     project_dir = PROJECTS_DIR / project_id
     state_path = project_dir / "state.json"
 
@@ -167,7 +175,37 @@ def _load_project(project_id: str):
         state = ProjectState.from_dict(data)
         st.session_state.project_state = state
         st.session_state.current_project = project_id
-        st.session_state.current_page = "generation" if state.current_step == "generation" else "plan"
+
+        # Restaurer le provider automatiquement (C1-E)
+        provider_name = state.config.get("default_provider")
+        provider_restored = False
+
+        if provider_name:
+            info = PROVIDERS_INFO.get(provider_name, {})
+            api_key = os.environ.get(info.get("env_var", ""), "")
+            if api_key and api_key != info.get("placeholder", ""):
+                provider = create_provider(provider_name, api_key)
+                if provider and provider.is_available():
+                    st.session_state.provider = provider
+                    st.session_state.cost_tracker = CostTracker()
+                    provider_restored = True
+
+        if provider_restored:
+            # Navigation vers la page appropriée
+            if state.current_step == "generation":
+                st.session_state.current_page = "generation"
+            elif state.current_step in ("review", "export"):
+                st.session_state.current_page = "export"
+            else:
+                st.session_state.current_page = "plan"
+        else:
+            # Pas de provider restaurable → rediriger vers Configuration
+            st.session_state.current_page = "configuration"
+            st.session_state._restore_message = (
+                "Le projet a été restauré. Reconfigurez votre fournisseur IA "
+                "pour continuer."
+            )
+
         st.rerun()
     except Exception as e:
         st.error(f"Erreur lors du chargement du projet : {e}")

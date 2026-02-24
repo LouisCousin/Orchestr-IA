@@ -140,6 +140,21 @@ class TestMarkdownTableParsing:
         types = [b[0] for b in blocks]
         assert "bold_heading" in types
 
+    def test_split_into_blocks_detects_markdown_heading(self, engine):
+        """CA2-4: ## Mon titre → heading_2 block."""
+        content = "Intro.\n\n## Mon titre\n\nTexte."
+        blocks = engine._split_into_blocks(content)
+        found = [b for b in blocks if b[0] == "heading_2"]
+        assert len(found) == 1
+        assert found[0][1] == "Mon titre"
+
+    def test_split_into_blocks_normal_text_no_heading(self, engine):
+        """CA2-5: Texte normal ne produit pas de block heading."""
+        content = "Texte normal sans aucun titre."
+        blocks = engine._split_into_blocks(content)
+        heading_blocks = [b for b in blocks if b[0].startswith("heading_")]
+        assert len(heading_blocks) == 0
+
     def test_export_with_table(self, engine, sample_plan, generated_sections_with_table, tmp_path):
         output = tmp_path / "table_output.docx"
         result = engine.export_docx(sample_plan, generated_sections_with_table, output, "Test Table")
