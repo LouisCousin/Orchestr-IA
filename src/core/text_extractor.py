@@ -120,7 +120,7 @@ def _create_docling_converter(pdf_cfg: dict):
 
     pipeline_options = PdfPipelineOptions()
     pipeline_options.generate_page_images = not pdf_cfg["disable_page_images"]
-    pipeline_options.generate_picture_images = not pdf_cfg["disable_page_images"]
+    pipeline_options.generate_picture_images = not pdf_cfg.get("disable_picture_images", True)
     pipeline_options.do_picture_classification = not pdf_cfg["disable_picture_classification"]
 
     converter = DocumentConverter(
@@ -176,7 +176,7 @@ def _get_pdf_page_count(path: Path) -> int:
     return 0
 
 
-def _extract_pdf_docling(path: Path) -> tuple[str, int, list[dict], str | None]:
+def _extract_pdf_docling(path: Path) -> tuple[str, int, list[dict], str | None, str, str]:
     """Extraction PDF via Docling avec structure sémantique.
 
     Inclut :
@@ -185,8 +185,10 @@ def _extract_pdf_docling(path: Path) -> tuple[str, int, list[dict], str | None]:
     - Détection de couverture et rattrapage pymupdf pour les pages manquantes
 
     Returns:
-        Tuple (texte_complet, nombre_pages, structure_sémantique, titre).
+        Tuple (texte_complet, nombre_pages, structure_sémantique, titre, méthode, statut).
     """
+    from docling.datamodel.settings import PageRange
+
     pdf_cfg = _load_pdf_extraction_config()
     batch_threshold = pdf_cfg["docling_batch_threshold"]
     batch_size = pdf_cfg["docling_page_batch_size"]
@@ -210,7 +212,8 @@ def _extract_pdf_docling(path: Path) -> tuple[str, int, list[dict], str | None]:
             logger.info(f"  Lot pages {start}-{end}/{total_pages}")
             try:
                 converter = _create_docling_converter(pdf_cfg)
-                result = converter.convert(str(path), page_range=(start, end))
+                page_range: PageRange = (start, end)
+                result = converter.convert(str(path), page_range=page_range)
                 batch_sections = _extract_sections_from_docling_result(result)
                 sections.extend(batch_sections)
                 logger.info(f"  → {len(batch_sections)} éléments extraits")
@@ -279,6 +282,12 @@ def _extract_pdf_docling(path: Path) -> tuple[str, int, list[dict], str | None]:
             logger.warning("pymupdf non disponible pour le rattrapage des pages manquantes")
         except Exception as e:
             logger.warning(f"Échec du rattrapage pymupdf : {e}")
+
+    # Recalculer la couverture après rattrapage pymupdf
+    if method == "docling+pymupdf" and total_pages > 0:
+        pages_covered_after = set(s.get("page") for s in sections if s.get("page"))
+        coverage_ratio = len(pages_covered_after) / total_pages
+        logger.info(f"Couverture après rattrapage : {coverage_ratio:.0%}")
 
     # ── Reconstruction du résultat ──
     sections.sort(key=lambda s: s.get("page") or 0)
