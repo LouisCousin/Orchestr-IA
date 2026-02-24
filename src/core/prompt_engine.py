@@ -49,39 +49,39 @@ Règles générales :
 - Ne fabrique pas de données ou de statistiques.
 {persistent_instructions}{anti_hallucination}"""
 
-SECTION_PROMPT_TEMPLATE = """## Objectif du document
+SECTION_PROMPT_TEMPLATE = """═══ OBJECTIF DU DOCUMENT ═══
 {objective}
 
-## Section à rédiger
+═══ SECTION À RÉDIGER ═══
 Titre : {section_title}
 Niveau hiérarchique : {section_level}
 {section_description}
 
-## Consignes de longueur
+═══ CONSIGNES DE LONGUEUR ═══
 {length_instruction}
 
-## Contexte des sections précédentes
+═══ CONTEXTE DES SECTIONS PRÉCÉDENTES ═══
 {previous_context}
 
-## Corpus source pertinent
+═══ CORPUS SOURCE PERTINENT ═══
 {corpus_content}
 
-## Instructions
+═══ INSTRUCTIONS ═══
 Rédige le contenu de cette section en respectant les consignes ci-dessus.
 Le texte doit être structuré, professionnel et directement exploitable dans un document final.
 N'inclus pas le titre de la section dans ta réponse (il sera ajouté automatiquement).
-N'utilise pas de titres Markdown (# ou ##) dans ta réponse. Structure le contenu avec des sous-titres en gras (**Sous-titre**) si nécessaire.
+N'utilise pas de titres Markdown (# ou ##) dans ta réponse. Si tu as besoin de sous-titres internes, utilise le format en gras : **Sous-titre**.
 """
 
 PLAN_GENERATION_PROMPT = """À partir de l'objectif suivant, génère un plan structuré détaillé pour un document professionnel.
 
-## Objectif
+═══ OBJECTIF ═══
 {objective}
 
-## Taille cible
+═══ TAILLE CIBLE ═══
 {target_pages} pages environ.
 {corpus_section}
-## Instructions
+═══ INSTRUCTIONS ═══
 - Propose un plan hiérarchique avec des sections numérotées (1. / 1.1 / 1.1.1).
 - Chaque section doit avoir un titre clair et descriptif.
 - Le plan doit être logique, progressif et couvrir l'ensemble du sujet.
@@ -90,27 +90,27 @@ PLAN_GENERATION_PROMPT = """À partir de l'objectif suivant, génère un plan st
 """
 
 
-REFINEMENT_PROMPT_TEMPLATE = """## Objectif du document
+REFINEMENT_PROMPT_TEMPLATE = """═══ OBJECTIF DU DOCUMENT ═══
 {objective}
 
-## Section à raffiner
+═══ SECTION À RAFFINER ═══
 Titre : {section_title}
 Niveau hiérarchique : {section_level}
 {section_description}
 
-## Consignes de longueur
+═══ CONSIGNES DE LONGUEUR ═══
 {length_instruction}
 
-## Contexte des sections précédentes
+═══ CONTEXTE DES SECTIONS PRÉCÉDENTES ═══
 {previous_context}
 
-## Corpus source pertinent
+═══ CORPUS SOURCE PERTINENT ═══
 {corpus_content}
 
-## Brouillon actuel à améliorer
+═══ BROUILLON ACTUEL À AMÉLIORER ═══
 {draft_content}
 {extra_instruction}
-## Instructions de raffinement
+═══ INSTRUCTIONS DE RAFFINEMENT ═══
 Améliore le brouillon ci-dessus en :
 - Renforçant la précision et la richesse du contenu à partir du corpus source.
 - Améliorant la structure, la clarté et la fluidité du texte.
@@ -132,14 +132,19 @@ class PromptEngine:
         self.persistent_instructions = persistent_instructions
         self.anti_hallucination_enabled = anti_hallucination_enabled
 
-    def build_system_prompt(self) -> str:
-        """Construit le prompt système avec instructions persistantes et garde-fous."""
+    def build_system_prompt(self, has_corpus: bool = True) -> str:
+        """Construit le prompt système avec instructions persistantes et garde-fous.
+
+        Args:
+            has_corpus: Si False, désactive le bloc anti-hallucination pour éviter
+                la contradiction avec l'instruction d'utiliser les connaissances générales.
+        """
         instructions = ""
         if self.persistent_instructions:
             instructions = f"\n\nInstructions spécifiques au projet :\n{self.persistent_instructions}"
 
         anti_hallucination = ""
-        if self.anti_hallucination_enabled:
+        if self.anti_hallucination_enabled and has_corpus:
             anti_hallucination = f"\n{ANTI_HALLUCINATION_BLOCK}"
 
         return SYSTEM_PROMPT_TEMPLATE.format(
@@ -179,7 +184,12 @@ class PromptEngine:
         if corpus_chunks:
             corpus_content = self._format_corpus_chunks_grouped(corpus_chunks)
         else:
-            corpus_content = "Aucun corpus source fourni. Rédige à partir de tes connaissances générales."
+            corpus_content = (
+                "Aucun corpus source disponible pour cette section. "
+                "Tu peux utiliser tes connaissances générales, mais signale "
+                "systématiquement les passages non sourcés avec le marqueur "
+                "{{NEEDS_SOURCE: [description du point]}}."
+            )
 
         prompt = SECTION_PROMPT_TEMPLATE.format(
             objective=plan.objective or plan.title or "Document professionnel",
@@ -191,7 +201,7 @@ class PromptEngine:
             corpus_content=corpus_content,
         )
         if extra_instruction:
-            prompt += f"\n\n## Consigne supplémentaire\n{extra_instruction}\n"
+            prompt += f"\n\n═══ CONSIGNE SUPPLÉMENTAIRE ═══\n{extra_instruction}\n"
         return prompt
 
     def build_refinement_prompt(
@@ -223,9 +233,14 @@ class PromptEngine:
         if corpus_chunks:
             corpus_content = self._format_corpus_chunks_grouped(corpus_chunks)
         else:
-            corpus_content = "Aucun corpus source fourni."
+            corpus_content = (
+                "Aucun corpus source disponible pour cette section. "
+                "Tu peux utiliser tes connaissances générales, mais signale "
+                "systématiquement les passages non sourcés avec le marqueur "
+                "{{NEEDS_SOURCE: [description du point]}}."
+            )
 
-        extra_block = f"\n## Consigne supplémentaire\n{extra_instruction}" if extra_instruction else ""
+        extra_block = f"\n═══ CONSIGNE SUPPLÉMENTAIRE ═══\n{extra_instruction}" if extra_instruction else ""
 
         return REFINEMENT_PROMPT_TEMPLATE.format(
             objective=plan.objective or plan.title or "Document professionnel",
@@ -284,7 +299,7 @@ class PromptEngine:
                 parts.append(f"[Document {i} : {entry['source_file']}]\n{entry['text']}")
             corpus_text = "\n\n---\n\n".join(parts)
             return (
-                f"\n## Extraits du corpus documentaire disponible\n"
+                f"\n═══ EXTRAITS DU CORPUS DOCUMENTAIRE DISPONIBLE ═══\n"
                 f"Voici un extrait représentatif de chaque document source "
                 f"({num_docs} document(s)) :\n\n{corpus_text}\n\n"
             )
@@ -297,7 +312,7 @@ class PromptEngine:
                 lines.append(f"{i}. {entry['source_file']} — {entry['text']}{kw_str}")
             listing = "\n".join(lines)
             return (
-                f"\n## Documents disponibles ({num_docs} documents)\n\n"
+                f"\n═══ DOCUMENTS DISPONIBLES ({num_docs} documents) ═══\n\n"
                 f"{listing}\n\n"
             )
 
@@ -320,9 +335,9 @@ class PromptEngine:
                 parts.append(f"[{entry['source_file']}]\n{entry['text']}")
             excerpts_text = "\n\n---\n\n".join(parts)
             return (
-                f"\n## Corpus disponible ({num_docs} documents)\n\n"
-                f"### Liste des sources et thématiques\n{files_listing}\n\n"
-                f"### Extraits représentatifs (échantillon de {len(entries)} documents)\n\n"
+                f"\n═══ CORPUS DISPONIBLE ({num_docs} documents) ═══\n\n"
+                f"--- Liste des sources et thématiques ---\n{files_listing}\n\n"
+                f"--- Extraits représentatifs (échantillon de {len(entries)} documents) ---\n\n"
                 f"{excerpts_text}\n\n"
             )
 
@@ -334,19 +349,29 @@ class PromptEngine:
         )
 
     @staticmethod
+    def _get_chunk_attr(chunk, key, default=""):
+        """Accède à un attribut d'un chunk, qu'il soit un dict ou un objet."""
+        if isinstance(chunk, dict):
+            return chunk.get(key, default)
+        return getattr(chunk, key, default)
+
+    @staticmethod
     def _format_corpus_chunks_grouped(corpus_chunks: list) -> str:
         """Regroupe les chunks par document source pour le prompt.
 
         Au lieu de numéroter chaque chunk individuellement ([Source 1], [Source 2]...),
         les regroupe par fichier source avec des références APA si disponibles.
+        Supporte les chunks sous forme de dict ou d'objet (formats hétérogènes).
         """
         from collections import OrderedDict
 
+        _get = PromptEngine._get_chunk_attr
+
         grouped = OrderedDict()
         for chunk in corpus_chunks:
-            source = getattr(chunk, "source_file", "inconnu")
-            apa_ref = getattr(chunk, "apa_reference", None)
-            text = getattr(chunk, "text", str(chunk))
+            source = _get(chunk, "source_file", "inconnu")
+            apa_ref = _get(chunk, "apa_reference", None)
+            text = _get(chunk, "text", str(chunk))
             key = source
             if key not in grouped:
                 grouped[key] = {"apa_reference": apa_ref, "extracts": []}
@@ -369,4 +394,4 @@ class PromptEngine:
 
             parts.append(f"{header}\n" + "\n".join(extracts))
 
-        return "\n\n---\n\n".join(parts)
+        return "\n\n════════════════\n\n".join(parts)

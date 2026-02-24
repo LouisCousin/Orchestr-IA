@@ -7,7 +7,7 @@ from src.core.checkpoint_manager import CheckpointConfig
 from src.core.cost_tracker import CostTracker
 from src.utils.config import ROOT_DIR
 from src.utils.file_utils import save_json
-from src.utils.providers_registry import PROVIDERS_INFO
+from src.utils.providers_registry import PROVIDERS_INFO, create_provider
 
 
 PROJECTS_DIR = ROOT_DIR / "projects"
@@ -21,20 +21,6 @@ def _save_state(state):
         save_json(state_path, state.to_dict())
 
 
-def _create_provider(provider_name: str, api_key: str):
-    """Crée une instance du fournisseur sélectionné."""
-    if provider_name == "openai":
-        from src.providers.openai_provider import OpenAIProvider
-        return OpenAIProvider(api_key=api_key)
-    elif provider_name == "anthropic":
-        from src.providers.anthropic_provider import AnthropicProvider
-        return AnthropicProvider(api_key=api_key)
-    elif provider_name == "google":
-        from src.providers.gemini_provider import GeminiProvider
-        return GeminiProvider(api_key=api_key)
-    return None
-
-
 def render():
     st.title("Configuration")
     st.info(
@@ -42,6 +28,12 @@ def render():
         "modèle de génération et ajustez les paramètres (température, tokens max). "
         "Ces réglages seront utilisés pour toute la génération du document."
     )
+
+    # Message de restauration de projet (C1-E)
+    restore_msg = st.session_state.pop("_restore_message", None)
+    if restore_msg:
+        st.info(restore_msg)
+
     st.markdown("---")
 
     if not st.session_state.project_state:
@@ -127,7 +119,7 @@ def _render_api_config():
             st.error("Veuillez saisir une clé API.")
             return
 
-        provider = _create_provider(selected_provider, key)
+        provider = create_provider(selected_provider, key)
         if provider and provider.is_available():
             st.session_state.provider = provider
             st.session_state.cost_tracker = CostTracker()

@@ -4,7 +4,10 @@ import re
 from typing import Optional
 
 
-_SOURCE_PATTERN = re.compile(r'\[Source\s*\d+\]')
+_SOURCE_PATTERN = re.compile(
+    r'\[Source\s*\d+(?:\s*:\s*[^\]]+)?\]',
+    re.IGNORECASE,
+)
 
 
 def clean_source_references(text: str, source_map: Optional[dict] = None) -> str:
