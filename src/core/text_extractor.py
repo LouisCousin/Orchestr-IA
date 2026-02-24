@@ -4,6 +4,7 @@ Supporte : PDF (docling → pymupdf → pdfplumber → PyPDF2), DOCX, HTML, TXT/
 Phase 2.5 : ajout de Docling comme extracteur PDF prioritaire avec structure sémantique.
 """
 
+import gc
 import logging
 import os
 from dataclasses import dataclass, field
@@ -11,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from src.utils.config import load_default_config
 from src.utils.file_utils import sha256_file, sha256_text
 
 logger = logging.getLogger("orchestria")
@@ -93,18 +95,48 @@ def _detect_heading_level(label: str) -> int:
     return 0
 
 
-def _extract_pdf_docling(path: Path) -> tuple[str, int, list[dict]]:
-    """Extraction PDF via Docling avec structure sémantique.
+def _load_pdf_extraction_config() -> dict:
+    """Charge la configuration pdf_extraction depuis default.yaml avec valeurs par défaut."""
+    try:
+        cfg = load_default_config()
+        pdf_cfg = cfg.get("pdf_extraction", {}) or {}
+    except Exception:
+        pdf_cfg = {}
+    return {
+        "docling_page_batch_size": pdf_cfg.get("docling_page_batch_size", 30),
+        "docling_batch_threshold": pdf_cfg.get("docling_batch_threshold", 50),
+        "coverage_threshold": pdf_cfg.get("coverage_threshold", 0.80),
+        "disable_page_images": pdf_cfg.get("disable_page_images", True),
+        "disable_picture_classification": pdf_cfg.get("disable_picture_classification", True),
+    }
 
-    Returns:
-        Tuple (texte_complet, nombre_pages, structure_sémantique).
-    """
-    from docling.document_converter import DocumentConverter
 
-    converter = DocumentConverter()
-    result = converter.convert(str(path))
+def _create_docling_converter(pdf_cfg: dict):
+    """Crée une instance DocumentConverter avec les options de pipeline optimisées."""
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
+
+    pipeline_options = PdfPipelineOptions()
+    pipeline_options.generate_page_images = not pdf_cfg["disable_page_images"]
+    pipeline_options.generate_picture_images = not pdf_cfg["disable_page_images"]
+    pipeline_options.do_picture_classification = not pdf_cfg["disable_picture_classification"]
+
+    converter = DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_options=pipeline_options,
+                backend=PyPdfiumDocumentBackend,
+            )
+        }
+    )
+    return converter
+
+
+def _extract_sections_from_docling_result(result) -> list[dict]:
+    """Extrait les sections structurées depuis un résultat Docling."""
     doc = result.document
-
     sections = []
     for item in doc.iterate_items():
         text = item.text if hasattr(item, "text") else str(item)
@@ -120,20 +152,158 @@ def _extract_pdf_docling(path: Path) -> tuple[str, int, list[dict]]:
             "page": page_no,
             "level": _detect_heading_level(str(label)),
         })
+    return sections
 
+
+def _get_pdf_page_count(path: Path) -> int:
+    """Obtient le nombre de pages d'un PDF via pypdfium2 ou fitz."""
+    try:
+        import pypdfium2 as pdfium
+        pdf = pdfium.PdfDocument(str(path))
+        count = len(pdf)
+        pdf.close()
+        return count
+    except Exception:
+        pass
+    try:
+        import fitz
+        doc = fitz.open(str(path))
+        count = len(doc)
+        doc.close()
+        return count
+    except Exception:
+        pass
+    return 0
+
+
+def _extract_pdf_docling(path: Path) -> tuple[str, int, list[dict], str | None]:
+    """Extraction PDF via Docling avec structure sémantique.
+
+    Inclut :
+    - Options de pipeline optimisées (pas d'images, backend PyPdfium2)
+    - Traitement par lots pour les gros PDF (>50 pages)
+    - Détection de couverture et rattrapage pymupdf pour les pages manquantes
+
+    Returns:
+        Tuple (texte_complet, nombre_pages, structure_sémantique, titre).
+    """
+    pdf_cfg = _load_pdf_extraction_config()
+    batch_threshold = pdf_cfg["docling_batch_threshold"]
+    batch_size = pdf_cfg["docling_page_batch_size"]
+    coverage_threshold = pdf_cfg["coverage_threshold"]
+
+    # Déterminer le nombre total de pages
+    total_pages = _get_pdf_page_count(path)
+    if total_pages == 0:
+        logger.warning(f"Impossible de déterminer le nombre de pages de {path.name}, conversion en une passe")
+
+    sections = []
+    method = "docling"
+
+    if total_pages > batch_threshold:
+        # ── Mode batch : traiter par lots de pages ──
+        logger.info(
+            f"PDF volumineux ({total_pages} pages), traitement par lots de {batch_size} pages"
+        )
+        for start in range(1, total_pages + 1, batch_size):
+            end = min(start + batch_size - 1, total_pages)
+            logger.info(f"  Lot pages {start}-{end}/{total_pages}")
+            try:
+                converter = _create_docling_converter(pdf_cfg)
+                result = converter.convert(str(path), page_range=(start, end))
+                batch_sections = _extract_sections_from_docling_result(result)
+                sections.extend(batch_sections)
+                logger.info(f"  → {len(batch_sections)} éléments extraits")
+            except Exception as e:
+                logger.warning(f"  Échec du lot pages {start}-{end}: {e}")
+            finally:
+                # Libérer la mémoire entre chaque lot (contournement fuite mémoire docling-parse)
+                try:
+                    del converter
+                    del result
+                except NameError:
+                    pass
+                gc.collect()
+    else:
+        # ── Mode single-pass : PDF de taille modérée ──
+        converter = _create_docling_converter(pdf_cfg)
+        result = converter.convert(str(path))
+        sections = _extract_sections_from_docling_result(result)
+
+        # Récupérer le page_count depuis Docling si on ne l'a pas
+        if total_pages == 0:
+            doc = result.document
+            total_pages = doc.num_pages() if hasattr(doc, "num_pages") else max(
+                (s.get("page") or 0 for s in sections), default=1
+            )
+
+        del converter
+        del result
+        gc.collect()
+
+    # ── Détection de couverture et rattrapage pymupdf ──
+    if total_pages > 0:
+        pages_covered = set()
+        for section in sections:
+            if section.get("page"):
+                pages_covered.add(section["page"])
+        coverage_ratio = len(pages_covered) / total_pages
+    else:
+        coverage_ratio = 1.0  # pas de référence, on considère OK
+
+    if total_pages > 0 and coverage_ratio < coverage_threshold:
+        missing_pages = set(range(1, total_pages + 1)) - pages_covered
+        logger.warning(
+            f"Docling n'a couvert que {len(pages_covered)}/{total_pages} pages "
+            f"({coverage_ratio:.0%}), rattrapage pymupdf pour {len(missing_pages)} pages manquantes"
+        )
+        try:
+            import fitz
+            doc = fitz.open(str(path))
+            recovered = 0
+            for page_num in sorted(missing_pages):
+                page = doc[page_num - 1]  # fitz est 0-indexed
+                page_text = page.get_text()
+                if page_text.strip():
+                    sections.append({
+                        "text": page_text,
+                        "type": "paragraph",
+                        "page": page_num,
+                        "level": 0,
+                    })
+                    recovered += 1
+            doc.close()
+            logger.info(f"Rattrapage pymupdf : {recovered} pages récupérées sur {len(missing_pages)} manquantes")
+            method = "docling+pymupdf"
+        except ImportError:
+            logger.warning("pymupdf non disponible pour le rattrapage des pages manquantes")
+        except Exception as e:
+            logger.warning(f"Échec du rattrapage pymupdf : {e}")
+
+    # ── Reconstruction du résultat ──
+    sections.sort(key=lambda s: s.get("page") or 0)
     full_text = "\n".join(s["text"] for s in sections)
-    page_count = doc.num_pages() if hasattr(doc, "num_pages") else max(
+    page_count = total_pages if total_pages > 0 else max(
         (s.get("page") or 0 for s in sections), default=1
     )
 
-    # Extract title from first heading/title element
+    # Déterminer le statut
+    if coverage_ratio >= coverage_threshold:
+        status = "success"
+    elif coverage_ratio >= 0.50:
+        status = "partial"
+    else:
+        status = "partial"
+        logger.warning(f"Couverture faible même après rattrapage : {coverage_ratio:.0%}")
+
+    # Extraire le titre depuis le premier heading
     title = None
     for s in sections:
         if s.get("level", 0) >= 1:
             title = s["text"].strip()
             break
 
-    return full_text, page_count, sections, title
+    return full_text, page_count, sections, title, method, status
 
 
 def _extract_pdf_metadata(path: Path) -> dict:
@@ -217,11 +387,14 @@ def extract_pdf(path: Path) -> ExtractionResult:
     for lib_name in available:
         try:
             if lib_name == "docling":
-                # Docling retourne aussi la structure sémantique
-                text, page_count, structure, title = _extract_pdf_docling(path)
+                # Docling retourne aussi la structure sémantique + méthode + statut
+                text, page_count, structure, title, method, status = _extract_pdf_docling(path)
                 if text.strip():
-                    logger.info(f"PDF extrait avec docling: {path.name} ({page_count} pages, {len(structure)} éléments)")
-                    result = _make_result(path, text=text, page_count=page_count, method="docling", status="success")
+                    logger.info(
+                        f"PDF extrait avec {method}: {path.name} "
+                        f"({page_count} pages, {len(structure)} éléments, statut={status})"
+                    )
+                    result = _make_result(path, text=text, page_count=page_count, method=method, status=status)
                     result.structure = structure
                     if title:
                         result.metadata["title"] = title

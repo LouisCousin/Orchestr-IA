@@ -73,6 +73,14 @@ cost_estimation:
   enabled: true
   warn_threshold_usd: 5.0
 
+# ── Extraction PDF (Phase 2.5) ──
+pdf_extraction:
+  docling_page_batch_size: 30        # Pages par lot pour Docling
+  docling_batch_threshold: 50        # Seuil de pages pour activer le batch
+  coverage_threshold: 0.80           # Ratio min de pages couvertes avant rattrapage pymupdf
+  disable_page_images: true          # Désactiver la génération d'images de pages
+  disable_picture_classification: true  # Désactiver la classification d'images
+
 # ═══════════════════════════════════════════
 # Phase 2.5 — Pipeline RAG complet
 # ═══════════════════════════════════════════
