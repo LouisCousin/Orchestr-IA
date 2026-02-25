@@ -165,12 +165,14 @@ class Orchestrator:
         activity_log: Optional[ActivityLog] = None,
         config: Optional[dict] = None,
     ):
+        import copy as _copy
+
         self.provider = provider
         self.project_dir = ensure_dir(project_dir)
         self.checkpoint_mgr = checkpoint_manager or CheckpointManager()
         self.cost_tracker = cost_tracker or CostTracker()
         self.activity_log = activity_log or ActivityLog()
-        self.config = _normalize_config(config or {})
+        self.config = _normalize_config(_copy.deepcopy(config or {}))
         self.prompt_engine = PromptEngine(
             persistent_instructions=self.config.get("persistent_instructions", ""),
             anti_hallucination_enabled=self.config.get("anti_hallucination_enabled", True),
@@ -960,9 +962,13 @@ class Orchestrator:
         """Génère un résumé de section pour le contexte."""
         try:
             summary_prompt = self.prompt_engine.build_summary_prompt(section.title, content)
+            # Summaries are about already-generated content, not corpus;
+            # disable the anti-hallucination block so the model isn't
+            # told to rely exclusively on corpus sources.
+            summary_system = self.prompt_engine.build_system_prompt(has_corpus=False)
             response = self.provider.generate(
                 prompt=summary_prompt,
-                system_prompt=system_prompt,
+                system_prompt=summary_system,
                 model=model,
                 temperature=0.3,
                 max_tokens=200,
@@ -1078,7 +1084,9 @@ class Orchestrator:
                 objective, target_pages, corpus_digest=corpus_digest,
             )
 
-        system_prompt = self.prompt_engine.build_system_prompt()
+        system_prompt = self.prompt_engine.build_system_prompt(
+            has_corpus=bool(corpus) or use_plan_corpus,
+        )
 
         response = self.provider.generate(
             prompt=prompt,
