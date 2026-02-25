@@ -26,4 +26,6 @@ def _heuristic_count(text: str) -> int:
 
 def estimate_pages(token_count: int, tokens_per_page: int = 400) -> float:
     """Estime le nombre de pages à partir d'un nombre de tokens."""
+    if tokens_per_page <= 0:
+        return 0.0
     return token_count / tokens_per_page

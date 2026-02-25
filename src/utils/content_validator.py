@@ -44,7 +44,7 @@ def is_antibot_page(text: str, url: str = "") -> bool:
         True si le contenu semble être une page anti-bot.
     """
     if not text or not text.strip():
-        return True
+        return False
 
     text_lower = text.lower().strip()
 

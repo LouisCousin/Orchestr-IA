@@ -192,12 +192,15 @@ def _load_project(project_id: str):
 
         if provider_restored:
             # Navigation vers la page appropriée
-            if state.current_step == "generation":
-                st.session_state.current_page = "generation"
-            elif state.current_step in ("review", "export"):
-                st.session_state.current_page = "export"
-            else:
-                st.session_state.current_page = "plan"
+            step_to_page = {
+                "generation": "generation",
+                "review": "export",
+                "export": "export",
+                "done": "export",
+                "dashboard": "dashboard",
+                "bibliotheque": "bibliotheque",
+            }
+            st.session_state.current_page = step_to_page.get(state.current_step, "plan")
         else:
             # Pas de provider restaurable → rediriger vers Configuration
             st.session_state.current_page = "configuration"

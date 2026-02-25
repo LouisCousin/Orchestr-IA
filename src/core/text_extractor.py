@@ -367,11 +367,12 @@ def _extract_pdf_pypdf2(path: Path) -> tuple[str, int]:
     pages = []
     with open(path, "rb") as f:
         reader = PyPDF2.PdfReader(f)
+        page_count = len(reader.pages)
         for page in reader.pages:
             text = page.extract_text()
             if text:
                 pages.append(text)
-    return "\n\n".join(pages), len(reader.pages)
+    return "\n\n".join(pages), page_count
 
 
 _PDF_EXTRACTORS = {

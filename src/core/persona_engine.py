@@ -183,6 +183,16 @@ class PersonaEngine:
         self._section_assignments[section_id] = persona_id
         self._save()
 
+    def get_section_assignment(self, section_id: str) -> Optional[str]:
+        """Retourne l'ID du persona assigné à une section, ou None."""
+        return self._section_assignments.get(section_id)
+
+    def clear_section_assignment(self, section_id: str) -> None:
+        """Supprime l'assignation spécifique d'une section (utilise le principal)."""
+        if section_id in self._section_assignments:
+            self._section_assignments.pop(section_id)
+            self._save()
+
     def get_persona_for_section(self, section_id: str) -> Optional[dict]:
         """Retourne le persona actif pour une section.
 

@@ -347,7 +347,11 @@ def _render_metadata_overrides(corpus_dir: Path, project_dir: Path):
                 with st.form(key=f"meta_form_{doc_id}"):
                     new_title = st.text_input("Titre", value=title or "", key=f"meta_title_{doc_id}")
                     new_authors = st.text_input("Auteurs", value=authors or "", key=f"meta_authors_{doc_id}")
-                    new_year = st.number_input("Année", value=int(year) if year else 2024, min_value=1900, max_value=2100, key=f"meta_year_{doc_id}")
+                    try:
+                        year_val = int(year) if year else 2024
+                    except (ValueError, TypeError):
+                        year_val = 2024
+                    new_year = st.number_input("Année", value=year_val, min_value=1900, max_value=2100, key=f"meta_year_{doc_id}")
 
                     col_submit, col_cancel = st.columns(2)
                     with col_submit:

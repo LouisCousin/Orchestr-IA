@@ -30,7 +30,12 @@ PROVIDERS_INFO = {
 
 def get_provider_info(provider_name: str) -> dict:
     """Retourne les informations d'un fournisseur par son nom."""
-    return PROVIDERS_INFO.get(provider_name, PROVIDERS_INFO["openai"])
+    if provider_name not in PROVIDERS_INFO:
+        raise ValueError(
+            f"Fournisseur inconnu : {provider_name!r}. "
+            f"Disponibles : {list(PROVIDERS_INFO.keys())}"
+        )
+    return PROVIDERS_INFO[provider_name]
 
 
 def get_default_model(provider_name: str) -> str:

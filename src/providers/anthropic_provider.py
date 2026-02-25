@@ -161,9 +161,19 @@ class AnthropicProvider(BaseProvider):
         completed = 0
         failed = 0
         if counts:
-            total = getattr(counts, "processing", 0) + getattr(counts, "succeeded", 0) + getattr(counts, "errored", 0)
+            total = (
+                getattr(counts, "processing", 0)
+                + getattr(counts, "succeeded", 0)
+                + getattr(counts, "errored", 0)
+                + getattr(counts, "expired", 0)
+                + getattr(counts, "canceled", 0)
+            )
             completed = getattr(counts, "succeeded", 0)
             failed = getattr(counts, "errored", 0)
+
+        # An "ended" batch with zero successes and some failures is effectively failed
+        if batch_status == BatchStatusEnum.COMPLETED and completed == 0 and failed > 0:
+            batch_status = BatchStatusEnum.FAILED
 
         return BatchStatus(
             batch_id=batch_id,

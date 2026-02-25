@@ -156,20 +156,22 @@ def _render_bibliography_preview(state):
             from src.core.metadata_store import MetadataStore
 
             store = MetadataStore(str(project_dir))
-            citation_engine = CitationEngine(metadata_store=store, enabled=True)
+            try:
+                citation_engine = CitationEngine(metadata_store=store, enabled=True)
 
-            # Extract all inline citations from generated content
-            all_content = "\n\n".join(state.generated_sections.values())
-            citations = citation_engine.extract_inline_citations(all_content)
+                # Extract all inline citations from generated content
+                all_content = "\n\n".join(state.generated_sections.values())
+                citations = citation_engine.extract_inline_citations(all_content)
 
-            if citations:
-                resolved = citation_engine.resolve_citations(citations)
-                resolved_count = sum(1 for c in resolved if c.resolved_doc_id)
-                st.markdown(f"**{len(citations)} citation(s) inline détectée(s)** ({resolved_count} résolue(s))")
+                if citations:
+                    resolved = citation_engine.resolve_citations(citations)
+                    resolved_count = sum(1 for c in resolved if c.resolved_doc_id)
+                    st.markdown(f"**{len(citations)} citation(s) inline détectée(s)** ({resolved_count} résolue(s))")
 
-            # Compile bibliography
-            bibliography = citation_engine.compile_bibliography()
-            store.close()
+                # Compile bibliography
+                bibliography = citation_engine.compile_bibliography()
+            finally:
+                store.close()
 
             if bibliography:
                 st.markdown("**Bibliographie**")

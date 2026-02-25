@@ -6,20 +6,14 @@ echo ========================================
 echo.
 
 :: Chercher Python
-where python >nul 2>nul
-if %errorlevel%==0 (
-    set PYTHON=python
-) else (
-    where python3 >nul 2>nul
-    if %errorlevel%==0 (
-        set PYTHON=python3
-    ) else (
-        echo ERREUR : Python n'est pas installe ou n'est pas dans le PATH.
-        echo Installez Python depuis https://www.python.org/downloads/
-        pause
-        exit /b 1
-    )
-)
+where python >nul 2>nul && set PYTHON=python && goto :found
+where python3 >nul 2>nul && set PYTHON=python3 && goto :found
+echo ERREUR : Python n'est pas installe ou n'est pas dans le PATH.
+echo Installez Python depuis https://www.python.org/downloads/
+pause
+exit /b 1
+
+:found
 
 :: Se placer dans le dossier du script
 cd /d "%~dp0"
