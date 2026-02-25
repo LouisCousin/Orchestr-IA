@@ -30,9 +30,12 @@ def save_json(path: Path, data: dict) -> None:
 
 
 def load_json(path: Path) -> dict:
-    """Charge un fichier JSON."""
+    """Charge un fichier JSON (attend un objet à la racine)."""
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected JSON object in {path}, got {type(data).__name__}")
+    return data
 
 
 def sha256_file(path: Path) -> str:

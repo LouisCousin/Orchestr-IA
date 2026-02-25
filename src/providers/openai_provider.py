@@ -134,7 +134,7 @@ class OpenAIProvider(BaseProvider):
 
         # 2. Upload le fichier JSONL
         with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-            f.write("\n".join(jsonl_lines))
+            f.write("\n".join(jsonl_lines) + "\n")
             jsonl_path = f.name
 
         try:

@@ -26,8 +26,9 @@ class TestIsAntibotPage:
         assert is_antibot_page(text) is False
 
     def test_empty_text(self):
-        assert is_antibot_page("") is True
-        assert is_antibot_page(None) is True
+        """Empty/None text is not an anti-bot page (no keywords matched)."""
+        assert is_antibot_page("") is False
+        assert is_antibot_page(None) is False
 
     def test_short_text_with_keyword(self):
         text = "Checking your browser. Please wait."
