@@ -283,6 +283,12 @@ def _render_view_plan(state):
     with st.expander("Remplacer le plan"):
         _render_create_plan(state)
 
+    # Phase 3: Glossary sub-section after plan validation
+    _render_glossary_section(state, plan)
+
+    # Phase 3: Persona per section selector
+    _render_persona_section(state, plan)
+
     # Navigation
     st.markdown("---")
     col1, col2 = st.columns(2)
@@ -296,6 +302,159 @@ def _render_view_plan(state):
         if st.button("Retour", use_container_width=True):
             st.session_state.current_page = "acquisition"
             st.rerun()
+
+
+def _render_glossary_section(state, plan):
+    """Phase 3: Glossary sub-section displayed after plan validation."""
+    config = state.config
+    gl_config = config.get("glossary", {})
+    if not gl_config.get("enabled", False):
+        return
+
+    st.markdown("---")
+    with st.expander("Glossaire terminologique (Phase 3)", expanded=False):
+        project_id = st.session_state.current_project
+        project_dir = PROJECTS_DIR / project_id
+
+        from src.core.glossary_engine import GlossaryEngine
+        glossary = GlossaryEngine(
+            project_dir=project_dir,
+            max_terms_per_prompt=gl_config.get("max_terms_per_prompt", 15),
+            enabled=True,
+        )
+
+        terms = glossary.get_all_terms()
+        if terms:
+            st.markdown(f"**{len(terms)} terme(s) dans le glossaire**")
+            for t in terms:
+                abbr = f" ({t.get('abbreviation')})" if t.get("abbreviation") else ""
+                st.markdown(f"- **{t['term']}{abbr}** : {t['definition']}")
+                if t.get("preferred_form") and t["preferred_form"] != t["term"]:
+                    st.caption(f"  Forme préférée : {t['preferred_form']}")
+                if t.get("avoid_forms"):
+                    st.caption(f"  Éviter : {', '.join(t['avoid_forms'])}")
+        else:
+            st.info("Aucun terme dans le glossaire.")
+
+        # Auto-generate button
+        provider = st.session_state.get("provider")
+        if provider and provider.is_available():
+            if st.button("Générer le glossaire automatiquement", key="gen_glossary"):
+                with st.spinner("Génération du glossaire..."):
+                    try:
+                        generated = glossary.generate_from_plan(plan, provider)
+                        added = glossary.apply_generated_terms(generated)
+                        state.glossary = {"terms": glossary.get_all_terms()}
+                        _save_state(state)
+                        st.success(f"{added} terme(s) ajouté(s) au glossaire.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erreur : {e}")
+
+        # Manual add
+        st.markdown("---")
+        st.markdown("**Ajouter un terme manuellement**")
+        with st.form("add_term_form"):
+            term_name = st.text_input("Terme")
+            term_def = st.text_input("Définition")
+            term_abbr = st.text_input("Abréviation (optionnel)")
+            if st.form_submit_button("Ajouter"):
+                if term_name and term_def:
+                    try:
+                        glossary.add_term(term=term_name, definition=term_def, abbreviation=term_abbr or None)
+                        state.glossary = {"terms": glossary.get_all_terms()}
+                        _save_state(state)
+                        st.success(f"Terme '{term_name}' ajouté.")
+                        st.rerun()
+                    except ValueError as e:
+                        st.warning(str(e))
+                else:
+                    st.warning("Renseignez le terme et la définition.")
+
+
+def _render_persona_section(state, plan):
+    """Phase 3: Persona per section selector (optional)."""
+    config = state.config
+    p_config = config.get("personas", {})
+    if not p_config.get("enabled", False):
+        return
+
+    st.markdown("---")
+    with st.expander("Personas par section (Phase 3)", expanded=False):
+        project_id = st.session_state.current_project
+        project_dir = PROJECTS_DIR / project_id
+
+        from src.core.persona_engine import PersonaEngine
+        persona_engine = PersonaEngine(project_dir=project_dir, enabled=True)
+
+        personas = persona_engine.list_personas()
+        if not personas:
+            st.info("Aucun persona configuré. Créez-en dans Configuration > Phase 3 > Personas.")
+
+            # AI suggestion button
+            provider = st.session_state.get("provider")
+            if provider and provider.is_available() and plan.objective:
+                if st.button("Suggérer des personas par l'IA", key="suggest_personas"):
+                    with st.spinner("Suggestion en cours..."):
+                        try:
+                            suggested = persona_engine.suggest_personas(
+                                plan, plan.objective, provider,
+                            )
+                            for p in suggested:
+                                persona_engine.create(
+                                    name=p.get("name", "Persona"),
+                                    profile=p.get("profile", ""),
+                                    expertise_level=p.get("expertise_level", "intermédiaire"),
+                                    expectations=p.get("expectations", ""),
+                                    register=p.get("register", "formel"),
+                                )
+                            state.personas = {"personas": persona_engine.list_personas()}
+                            _save_state(state)
+                            st.success(f"{len(suggested)} persona(s) créé(s).")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erreur : {e}")
+            return
+
+        # Show personas
+        primary = persona_engine.get_primary()
+        primary_id = primary["id"] if primary else None
+
+        st.markdown(f"**{len(personas)} persona(s) configuré(s)**")
+        for p in personas:
+            is_primary = p["id"] == primary_id
+            marker = " (principal)" if is_primary else ""
+            st.markdown(f"- **{p['name']}{marker}** — {p.get('profile', '')[:80]}")
+
+        # Per-section assignment
+        st.markdown("---")
+        st.markdown("**Assigner un persona par section**")
+        persona_options = {p["name"]: p["id"] for p in personas}
+        persona_names = ["(Principal)"] + list(persona_options.keys())
+
+        for section in plan.sections:
+            current_assignment = persona_engine._section_assignments.get(section.id)
+            current_persona_name = "(Principal)"
+            for p in personas:
+                if p["id"] == current_assignment:
+                    current_persona_name = p["name"]
+                    break
+
+            selected = st.selectbox(
+                f"{section.id} {section.title}",
+                persona_names,
+                index=persona_names.index(current_persona_name) if current_persona_name in persona_names else 0,
+                key=f"persona_assign_{section.id}",
+            )
+
+            if selected != "(Principal)" and selected != current_persona_name:
+                pid = persona_options.get(selected)
+                if pid:
+                    persona_engine.assign_to_section(section.id, pid)
+            elif selected == "(Principal)" and current_assignment:
+                # Remove specific assignment (use primary)
+                persona_engine._section_assignments.pop(section.id, None)
+                persona_engine._save()
 
 
 def _save_state(state):

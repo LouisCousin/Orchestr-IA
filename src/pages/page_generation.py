@@ -1,4 +1,4 @@
-"""Page de génération séquentielle du contenu (Phase 2 : multi-pass, agentique, RAG)."""
+"""Page de génération séquentielle du contenu (Phase 2+3 : multi-pass, agentique, RAG, qualité, factcheck)."""
 
 import streamlit as st
 from pathlib import Path
@@ -66,6 +66,11 @@ def render():
     if state.deferred_sections:
         st.markdown("---")
         _render_deferred_sections(state)
+
+    # Phase 3: Quality and factcheck reports
+    if state.generated_sections and (state.quality_reports or state.factcheck_reports):
+        st.markdown("---")
+        _render_phase3_reports(state)
 
     # Section relecture (visible si des sections sont générées)
     if state.generated_sections:
@@ -456,8 +461,84 @@ def _render_deferred_sections(state):
         st.text(f"  [X] {sid} {title} — score: {score:.2f}, blocs: {blocks}")
 
 
+def _render_phase3_reports(state):
+    """Phase 3: Display quality and factcheck reports at the GENERATION_REVIEW checkpoint."""
+    st.subheader("Rapports de qualité et vérification factuelle")
+
+    plan = state.plan
+    for section in plan.sections:
+        sid = section.id
+        qr = state.quality_reports.get(sid)
+        fcr = state.factcheck_reports.get(sid)
+        if not qr and not fcr:
+            continue
+
+        with st.expander(f"{sid} {section.title} — Rapports", expanded=False):
+            col_q, col_f = st.columns(2)
+
+            # Quality report
+            with col_q:
+                st.markdown("**Rapport qualité**")
+                if qr:
+                    score = qr.get("global_score", 0)
+                    color = "green" if score >= 4.0 else ("orange" if score >= 3.0 else "red")
+                    st.markdown(f"Score global : **:{color}[{score:.2f}/5.0]**")
+
+                    for criterion in qr.get("criteria", []):
+                        c_score = criterion.get("score", 0)
+                        c_name = criterion.get("name", "")
+                        c_just = criterion.get("justification", "")
+                        bar_val = c_score / 5.0
+                        st.progress(bar_val, text=f"{c_name}: {c_score:.1f}/5")
+                        if c_just:
+                            st.caption(c_just)
+
+                    recommendations = qr.get("recommendations", [])
+                    if recommendations:
+                        st.markdown("**Recommandations :**")
+                        for rec in recommendations:
+                            st.markdown(f"- {rec}")
+
+                    ns_count = qr.get("needs_source_count", 0)
+                    if ns_count > 0:
+                        st.warning(f"{ns_count} marqueur(s) {{{{NEEDS_SOURCE}}}} détecté(s)")
+                else:
+                    st.info("Non disponible")
+
+            # Factcheck report
+            with col_f:
+                st.markdown("**Rapport factcheck**")
+                if fcr:
+                    reliability = fcr.get("reliability_score", 0)
+                    total_claims = fcr.get("total_claims", 0)
+                    fc_color = "green" if reliability >= 80 else ("orange" if reliability >= 60 else "red")
+                    st.markdown(f"Fiabilité : **:{fc_color}[{reliability:.0f}%]** ({total_claims} affirmations)")
+
+                    status_counts = fcr.get("status_counts", {})
+                    for status, count in status_counts.items():
+                        if count > 0:
+                            icon = {"CORROBORÉE": "green", "PLAUSIBLE": "blue", "NON FONDÉE": "orange", "CONTREDITE": "red"}.get(status, "gray")
+                            st.markdown(f":{icon}[{status}] : {count}")
+
+                    # Details with color highlighting
+                    details = fcr.get("details", [])
+                    problematic = [d for d in details if d.get("status") in ("NON FONDÉE", "CONTREDITE")]
+                    if problematic:
+                        st.markdown("**Affirmations problématiques :**")
+                        for claim in problematic:
+                            status = claim.get("status", "")
+                            text = claim.get("text", "")
+                            just = claim.get("justification", "")
+                            claim_color = "orange" if status == "NON FONDÉE" else "red"
+                            st.markdown(f"- :{claim_color}[[{status}]] {text}")
+                            if just:
+                                st.caption(f"  → {just}")
+                else:
+                    st.info("Non disponible")
+
+
 def _render_review(state):
-    """Relecture des sections générées."""
+    """Relecture des sections générées avec feedback loop (Phase 3)."""
     st.subheader("Relecture des sections")
 
     plan = state.plan
@@ -475,12 +556,43 @@ def _render_review(state):
             )
 
             if edited != content:
-                if st.button("Sauvegarder les modifications", key=f"save_{section.id}"):
-                    state.generated_sections[section.id] = edited
-                    section.generated_content = edited
-                    project_id = st.session_state.current_project
-                    save_json(PROJECTS_DIR / project_id / "state.json", state.to_dict())
-                    st.success(f"Section {section.id} mise à jour.")
+                # Phase 3: Show diff summary
+                original_words = len(content.split())
+                edited_words = len(edited.split())
+                diff_words = abs(edited_words - original_words)
+                st.caption(f"Modification détectée : {original_words} → {edited_words} mots (delta: {diff_words})")
+
+                col_save, col_reject = st.columns(2)
+                with col_save:
+                    if st.button("Accepter les modifications", key=f"save_{section.id}", type="primary"):
+                        # Phase 3: Run feedback analysis
+                        orchestrator = st.session_state.get("orchestrator")
+                        if orchestrator and hasattr(orchestrator, '_run_feedback_analysis'):
+                            try:
+                                orchestrator._init_phase3_engines()
+                                orchestrator._run_feedback_analysis(section.id, content, edited)
+                            except Exception:
+                                pass
+
+                        state.generated_sections[section.id] = edited
+                        section.generated_content = edited
+                        project_id = st.session_state.current_project
+                        save_json(PROJECTS_DIR / project_id / "state.json", state.to_dict())
+                        st.success(f"Section {section.id} mise à jour.")
+                        st.rerun()
+
+                with col_reject:
+                    if st.button("Rejeter (restaurer)", key=f"reject_{section.id}"):
+                        st.rerun()
+
+    # Phase 3: Feedback loop statistics
+    if state.feedback_history:
+        with st.expander("Feedback loop — Historique"):
+            for entry in state.feedback_history[-10:]:
+                cat = entry.get("category", "")
+                suggestion = entry.get("suggestion", "")
+                sid = entry.get("section_id", "")
+                st.markdown(f"- **{sid}** [{cat}] : {suggestion}")
 
     st.markdown("---")
     if st.button("Passer à l'export", type="primary", use_container_width=True):

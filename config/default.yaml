@@ -1,4 +1,4 @@
-# Orchestr'IA - Configuration par défaut
+# Orchestr'IA - Configuration par défaut (Phase 1 + Phase 2 + Phase 2.5 + Phase 3)
 
 # Identifiant utilisateur par défaut (mono-utilisateur, prêt multi-utilisateur)
 default_user_id: "user_default"
