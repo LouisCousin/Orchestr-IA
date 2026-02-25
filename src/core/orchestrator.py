@@ -1,6 +1,8 @@
 """Orchestration séquentielle du pipeline de génération.
 
 Phase 2 : mode agentique, passes multiples, mode batch, RAG.
+Phase 3 : intelligence du pipeline — qualité, factcheck, glossaire,
+           personas, citations, feedback loop, HITL journal.
 """
 
 import json
@@ -219,6 +221,57 @@ class Orchestrator:
             from src.core.hitl_journal import HITLJournal
             self._hitl_journal = HITLJournal()
 
+        # B4: Connect HITL journal to checkpoint manager
+        if self._hitl_journal and self.checkpoint_mgr._hitl_journal is None:
+            self.checkpoint_mgr._hitl_journal = self._hitl_journal
+            self.checkpoint_mgr._project_name = self.state.name if self.state else ""
+
+        # B1: Glossary engine
+        if self._glossary_engine is None:
+            from src.core.glossary_engine import GlossaryEngine
+            gl_config = self.config.get("glossary", {})
+            self._glossary_engine = GlossaryEngine(
+                project_dir=self.project_dir,
+                max_terms_per_prompt=gl_config.get("max_terms_per_prompt", 15),
+                enabled=gl_config.get("enabled", False),
+            )
+
+        # B1: Persona engine
+        if self._persona_engine is None:
+            from src.core.persona_engine import PersonaEngine
+            p_config = self.config.get("personas", {})
+            self._persona_engine = PersonaEngine(
+                project_dir=self.project_dir,
+                enabled=p_config.get("enabled", False),
+            )
+
+        # B1: Citation engine
+        if self._citation_engine is None:
+            from src.core.citation_engine import CitationEngine
+            cit_config = self.config.get("citations", {})
+            self._citation_engine = CitationEngine(
+                metadata_store=self._metadata_store,
+                enabled=cit_config.get("enabled", False),
+            )
+
+        # B1: Persistent instructions engine
+        if not hasattr(self, '_persistent_instructions_engine') or self._persistent_instructions_engine is None:
+            from src.core.persistent_instructions import PersistentInstructions
+            self._persistent_instructions_engine = PersistentInstructions(
+                project_dir=self.project_dir,
+            )
+
+        # B2: Re-instantiate PromptEngine with Phase 3 parameters
+        cit_config = self.config.get("citations", {})
+        self.prompt_engine = PromptEngine(
+            persistent_instructions=self.config.get("persistent_instructions", ""),
+            anti_hallucination_enabled=self.config.get("anti_hallucination_enabled", True),
+            citations_enabled=cit_config.get("enabled", False),
+            glossary_engine=self._glossary_engine,
+            persona_engine=self._persona_engine,
+            persistent_instructions_engine=self._persistent_instructions_engine,
+        )
+
     def _init_rag(self) -> None:
         """Initialise le moteur RAG si nécessaire."""
         if self.rag_engine is not None:
@@ -364,6 +417,9 @@ class Orchestrator:
                     self.activity_log.info(f"Corpus indexé (sémantique) : {count} blocs")
                     # Stocker metadata_store pour réutilisation (plan_corpus_linker, etc.)
                     self._metadata_store = metadata_store
+                    # Phase 3: update citation engine with metadata store
+                    if self._citation_engine:
+                        self._citation_engine.metadata_store = metadata_store
                     return count
 
             except Exception as e:
@@ -414,6 +470,12 @@ class Orchestrator:
 
         system_prompt = self.prompt_engine.build_system_prompt()
 
+        # Initialize Phase 3 engines before generation
+        try:
+            self._init_phase3_engines()
+        except Exception as e:
+            logger.warning(f"Initialisation Phase 3 échouée : {e}")
+
         # Initialiser RAG et génération conditionnelle si corpus disponible
         use_rag = self.state.corpus and self.rag_engine is not None
         if self.state.corpus:
@@ -422,6 +484,23 @@ class Orchestrator:
             if self.rag_engine and self.rag_engine.indexed_count == 0:
                 self.index_corpus_rag()
             use_rag = self.rag_engine is not None and self.rag_engine.indexed_count > 0
+
+        # Phase 3: Auto-generate glossary before first generation
+        if (
+            not is_refinement
+            and self._glossary_engine
+            and self._glossary_engine.enabled
+            and not self._glossary_engine.get_all_terms()
+            and self.config.get("glossary", {}).get("auto_generate", True)
+        ):
+            try:
+                terms = self._glossary_engine.generate_from_plan(plan, self.provider)
+                added = self._glossary_engine.apply_generated_terms(terms)
+                if added:
+                    self.state.glossary = {"terms": self._glossary_engine.get_all_terms()}
+                    self.activity_log.info(f"Glossaire auto-généré : {added} termes")
+            except Exception as e:
+                logger.warning(f"Génération automatique du glossaire échouée : {e}")
 
         for i, section in enumerate(sections_to_generate):
             # Vérifier si la section est reportée (génération conditionnelle)
@@ -603,10 +682,28 @@ class Orchestrator:
 
         return self.state.generated_sections if self.state else {}
 
-    def resume_generation(self) -> dict:
-        """Reprend la génération après un checkpoint."""
+    def resume_generation(self, action: str = "approved", modified_content: Optional[str] = None, user_comment: str = "") -> dict:
+        """Reprend la génération après un checkpoint.
+
+        Args:
+            action: Decision ("approved", "modified", "rejected").
+            modified_content: Content modified by user (if action=="modified").
+            user_comment: User comment on the checkpoint.
+        """
         if self.checkpoint_mgr.has_pending:
-            self.checkpoint_mgr.resolve_checkpoint("approved")
+            pending = self.checkpoint_mgr.pending_checkpoint
+            section_id = pending.get("section_id") if pending else None
+
+            result = self.checkpoint_mgr.resolve_checkpoint(action, modified_content, user_comment)
+
+            # m1: If user modified the content, run feedback analysis
+            if action == "modified" and modified_content and section_id and self.state:
+                original = self.state.generated_sections.get(section_id, "")
+                if original:
+                    self._init_phase3_engines()
+                    self._run_feedback_analysis(section_id, original, modified_content)
+                    self.state.generated_sections[section_id] = modified_content
+
         return self.generate_all_sections(pass_number=self.state.current_pass if self.state else 1)
 
     def _run_post_generation_evaluation(
@@ -616,15 +713,20 @@ class Orchestrator:
         plan: NormalizedPlan,
         corpus_chunks: list,
         is_refinement: bool = False,
-    ) -> None:
-        """Exécute l'évaluation qualité et factcheck après génération (Phase 3)."""
+    ) -> Optional[str]:
+        """Exécute l'évaluation qualité et factcheck après génération (Phase 3).
+
+        Returns:
+            Updated content if auto-correction was applied, None otherwise.
+        """
         try:
             self._init_phase3_engines()
         except Exception as e:
             logger.warning(f"Initialisation Phase 3 échouée : {e}")
-            return
+            return None
 
         # Factcheck
+        fc_report = None
         factcheck_score = None
         if self._factcheck_engine and self._factcheck_engine.enabled:
             try:
@@ -645,6 +747,7 @@ class Orchestrator:
                 logger.warning(f"Factcheck échoué pour {section.id}: {e}")
 
         # Quality evaluation
+        qr = None
         if self._quality_evaluator and self._quality_evaluator.enabled:
             try:
                 qr = self._quality_evaluator.evaluate_section(
@@ -662,6 +765,146 @@ class Orchestrator:
                 )
             except Exception as e:
                 logger.warning(f"Évaluation qualité échouée pour {section.id}: {e}")
+
+        # B3: Auto-correction loop (agentic mode only)
+        if self.is_agentic:
+            corrected_content = self._auto_correct_if_needed(
+                section, content, plan, corpus_chunks, fc_report, qr,
+            )
+            if corrected_content:
+                return corrected_content
+
+        # B3: Citation resolution after generation
+        if self._citation_engine and self._citation_engine.enabled:
+            try:
+                citations = self._citation_engine.extract_inline_citations(content)
+                if citations:
+                    resolved = self._citation_engine.resolve_citations(citations)
+                    self.state.citations[section.id] = [
+                        {"raw": c.raw_text, "doc_id": c.resolved_doc_id}
+                        for c in resolved
+                    ]
+            except Exception as e:
+                logger.warning(f"Résolution des citations échouée pour {section.id}: {e}")
+
+        return None
+
+    def _auto_correct_if_needed(
+        self,
+        section: PlanSection,
+        content: str,
+        plan: NormalizedPlan,
+        corpus_chunks: list,
+        fc_report,
+        qr,
+    ) -> Optional[str]:
+        """B3: Trigger auto-correction if factcheck/quality scores are below thresholds.
+
+        Returns:
+            Corrected content string if a correction pass was triggered, None otherwise.
+        """
+        extra_instructions = []
+
+        # Factcheck auto-correction
+        if fc_report and self._factcheck_engine and self._factcheck_engine.should_correct(fc_report):
+            correction = self._factcheck_engine.get_correction_instruction(fc_report)
+            if correction:
+                extra_instructions.append(correction)
+                self.activity_log.warning(
+                    f"Auto-correction factcheck déclenchée pour {section.id} "
+                    f"(score: {fc_report.reliability_score:.0f}%)",
+                    section=section.id,
+                )
+
+        # Quality auto-refinement
+        if qr and self._quality_evaluator and self._quality_evaluator.should_refine(qr):
+            recommendations = qr.recommendations
+            if recommendations:
+                reco_text = "Améliorations requises :\n" + "\n".join(f"- {r}" for r in recommendations)
+                extra_instructions.append(reco_text)
+                self.activity_log.warning(
+                    f"Auto-raffinement qualité déclenché pour {section.id} "
+                    f"(score: {qr.global_score:.2f}/5.0)",
+                    section=section.id,
+                )
+
+        if not extra_instructions:
+            return None
+
+        # Trigger a single correction pass
+        combined_instruction = "\n\n".join(extra_instructions)
+        model = self.config.get("model", self.provider.get_default_model())
+        temperature = self.config.get("temperature", 0.7)
+        max_tokens = self.config.get("max_tokens", 4096)
+        target_pages = self.config.get("target_pages")
+
+        try:
+            prompt = self.prompt_engine.build_refinement_prompt(
+                section=section,
+                plan=plan,
+                draft_content=content,
+                corpus_chunks=corpus_chunks,
+                previous_summaries=self.state.section_summaries,
+                target_pages=target_pages,
+                extra_instruction=combined_instruction,
+            )
+            system_prompt = self.prompt_engine.build_system_prompt()
+
+            response = self.provider.generate(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
+            self.cost_tracker.record(
+                section_id=section.id,
+                model=model,
+                provider=self.provider.name,
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
+                task_type="auto_correction",
+            )
+
+            from src.utils.reference_cleaner import clean_source_references
+            corrected = clean_source_references(response.content)
+            self.state.generated_sections[section.id] = corrected
+            section.generated_content = corrected
+
+            self.activity_log.success(
+                f"Auto-correction {section.id} terminée ({response.output_tokens} tokens)",
+                section=section.id,
+            )
+            return corrected
+
+        except Exception as e:
+            logger.warning(f"Auto-correction échouée pour {section.id}: {e}")
+            return None
+
+    def _run_feedback_analysis(
+        self,
+        section_id: str,
+        original_content: str,
+        modified_content: str,
+    ) -> None:
+        """m1: Trigger feedback engine when user modifies text at a checkpoint."""
+        if not self._feedback_engine or not self._feedback_engine.enabled:
+            return
+        try:
+            entry = self._feedback_engine.analyze_modification(
+                section_id=section_id,
+                original=original_content,
+                corrected=modified_content,
+            )
+            if entry and self.state:
+                self.state.feedback_history.append(entry.to_dict())
+                self.activity_log.info(
+                    f"Feedback analysé pour {section_id}: catégorie={entry.category}",
+                    section=section_id,
+                )
+        except Exception as e:
+            logger.warning(f"Analyse feedback échouée pour {section_id}: {e}")
 
     def _generate_summary(self, section: PlanSection, content: str, model: str, system_prompt: str) -> str:
         """Génère un résumé de section pour le contexte."""

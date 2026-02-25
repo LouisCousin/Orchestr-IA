@@ -1,4 +1,4 @@
-"""Page de configuration — Paramètres du projet et du fournisseur IA (Phase 2)."""
+"""Page de configuration — Paramètres du projet et du fournisseur IA (Phase 2 + Phase 3)."""
 
 import os
 import streamlit as st
@@ -396,6 +396,19 @@ def _render_phase3_config():
     p_enabled = st.checkbox("Activer les personas", value=p_config.get("enabled", False), key="p_enabled")
     config.setdefault("personas", {})["enabled"] = p_enabled
 
+    # ── Instructions persistantes (M1) ──
+    st.markdown("---")
+    _render_persistent_instructions_config(config)
+
+    # ── Personas configuration (M1) ──
+    if p_enabled:
+        st.markdown("---")
+        _render_personas_config(config)
+
+    # ── Profils personnalisés (M1) ──
+    st.markdown("---")
+    _render_custom_profiles_config(config)
+
     # HITL Journal export
     st.markdown("### Journal HITL")
     if st.button("Exporter le journal HITL (Excel)"):
@@ -411,6 +424,229 @@ def _render_phase3_config():
             st.error(f"Erreur export journal HITL : {e}")
 
     _save_state(st.session_state.project_state)
+
+
+def _render_persistent_instructions_config(config):
+    """M1: Persistent instructions editor with 4 category tabs and 3 hierarchy levels."""
+    st.markdown("### Instructions persistantes")
+    st.caption("Définissez des instructions par catégorie et par niveau hiérarchique (Projet > Contexte > Section).")
+
+    project_id = st.session_state.current_project
+    if not project_id:
+        return
+
+    from src.core.persistent_instructions import PersistentInstructions, CATEGORIES, CATEGORY_LABELS
+
+    project_dir = PROJECTS_DIR / project_id
+
+    pi = PersistentInstructions(project_dir=project_dir)
+
+    # Category tabs
+    tab_labels = [CATEGORY_LABELS[cat] for cat in CATEGORIES]
+    tabs = st.tabs(tab_labels)
+
+    for tab, category in zip(tabs, CATEGORIES):
+        with tab:
+            label = CATEGORY_LABELS[category]
+
+            # Project level
+            st.markdown(f"**Niveau Projet** — {label}")
+            project_val = pi.get_project_instructions().get(category, "")
+            new_project = st.text_area(
+                f"Instruction projet ({label})",
+                value=project_val,
+                height=80,
+                key=f"pi_project_{category}",
+                label_visibility="collapsed",
+            )
+            if new_project != project_val:
+                if st.button(f"Sauvegarder (projet/{label})", key=f"save_pi_project_{category}"):
+                    pi.set_project_instruction(category, new_project)
+                    st.success("Instruction sauvegardée.")
+
+            # Context level
+            st.markdown(f"**Niveau Contexte** — {label}")
+            contexts = pi.list_contexts()
+            if contexts:
+                for ctx in contexts:
+                    ctx_val = pi.get_context_instructions(ctx).get(category, "")
+                    new_ctx = st.text_area(
+                        f"Contexte '{ctx}' ({label})",
+                        value=ctx_val,
+                        height=60,
+                        key=f"pi_ctx_{ctx}_{category}",
+                    )
+                    if new_ctx != ctx_val:
+                        if st.button(f"Sauvegarder (ctx:{ctx}/{label})", key=f"save_pi_ctx_{ctx}_{category}"):
+                            pi.set_context_instruction(ctx, category, new_ctx)
+                            st.success("Instruction sauvegardée.")
+            else:
+                new_ctx_name = st.text_input(
+                    f"Créer un contexte ({label})",
+                    placeholder="ex: introduction, analyse, conclusion",
+                    key=f"new_ctx_{category}",
+                )
+                if new_ctx_name and st.button(f"Créer contexte ({label})", key=f"create_ctx_{category}"):
+                    pi.set_context_instruction(new_ctx_name.strip(), category, "")
+                    st.success(f"Contexte '{new_ctx_name}' créé.")
+                    st.rerun()
+
+
+def _render_personas_config(config):
+    """M1: Personas creation/edition UI with AI suggestion."""
+    st.markdown("### Personas cibles")
+
+    project_id = st.session_state.current_project
+    if not project_id:
+        return
+
+    project_dir = PROJECTS_DIR / project_id
+
+    from src.core.persona_engine import PersonaEngine
+    engine = PersonaEngine(project_dir=project_dir, enabled=True)
+
+    personas = engine.list_personas()
+
+    # Display existing personas
+    if personas:
+        primary = engine.get_primary()
+        primary_id = primary["id"] if primary else None
+
+        for p in personas:
+            is_primary = p["id"] == primary_id
+            marker = " (Principal)" if is_primary else ""
+            with st.expander(f"{p['name']}{marker}", expanded=False):
+                st.markdown(f"**Profil :** {p.get('profile', '')}")
+                st.markdown(f"**Expertise :** {p.get('expertise_level', 'N/A')}")
+                st.markdown(f"**Attentes :** {p.get('expectations', '')}")
+                st.markdown(f"**Registre :** {p.get('register', 'formel')}")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    if not is_primary:
+                        if st.button("Définir comme principal", key=f"set_primary_{p['id']}"):
+                            engine.set_primary(p["id"])
+                            st.success(f"{p['name']} est maintenant le persona principal.")
+                            st.rerun()
+                with col2:
+                    if st.button("Supprimer", key=f"del_persona_{p['id']}"):
+                        engine.delete(p["id"])
+                        st.success(f"Persona '{p['name']}' supprimé.")
+                        st.rerun()
+
+        # Primary selector
+        persona_names = [p["name"] for p in personas]
+        current_primary_name = primary["name"] if primary else persona_names[0]
+        selected_primary = st.selectbox(
+            "Persona principal",
+            persona_names,
+            index=persona_names.index(current_primary_name) if current_primary_name in persona_names else 0,
+            key="primary_persona_select",
+        )
+        if selected_primary != current_primary_name:
+            pid = next((p["id"] for p in personas if p["name"] == selected_primary), None)
+            if pid:
+                engine.set_primary(pid)
+                st.rerun()
+
+    # AI suggestion
+    provider = st.session_state.get("provider")
+    if provider and provider.is_available():
+        if st.button("Suggérer par l'IA", key="suggest_personas_config"):
+            state = st.session_state.project_state
+            objective = state.config.get("objective", "")
+            if objective and state.plan:
+                with st.spinner("Suggestion en cours..."):
+                    try:
+                        suggested = engine.suggest_personas(state.plan, objective, provider)
+                        for p in suggested:
+                            engine.create(
+                                name=p.get("name", "Persona"),
+                                profile=p.get("profile", ""),
+                                expertise_level=p.get("expertise_level", "intermédiaire"),
+                                expectations=p.get("expectations", ""),
+                                register=p.get("register", "formel"),
+                            )
+                        st.success(f"{len(suggested)} persona(s) suggéré(s).")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erreur : {e}")
+            else:
+                st.warning("Définissez un objectif et un plan avant de suggérer des personas.")
+
+    # Create form
+    st.markdown("**Créer un persona**")
+    with st.form("create_persona_form"):
+        p_name = st.text_input("Nom")
+        p_profile = st.text_area("Profil (description)", height=60)
+        p_expertise = st.selectbox("Niveau d'expertise", ["débutant", "intermédiaire", "expert", "décideur"])
+        p_expectations = st.text_input("Attentes principales")
+        p_register = st.selectbox("Registre de communication", ["familier", "courant", "formel", "académique"])
+
+        if st.form_submit_button("Créer le persona"):
+            if p_name and p_profile:
+                try:
+                    engine.create(
+                        name=p_name,
+                        profile=p_profile,
+                        expertise_level=p_expertise,
+                        expectations=p_expectations,
+                        register=p_register,
+                    )
+                    st.success(f"Persona '{p_name}' créé.")
+                    st.rerun()
+                except ValueError as e:
+                    st.warning(str(e))
+            else:
+                st.warning("Renseignez le nom et le profil.")
+
+
+def _render_custom_profiles_config(config):
+    """M1: Custom profiles save/delete UI."""
+    st.markdown("### Profils personnalisés")
+    st.caption("Sauvegardez la configuration actuelle comme profil réutilisable.")
+
+    from src.core.profile_manager import ProfileManager
+    manager = ProfileManager()
+
+    # List custom profiles
+    custom_profiles = manager.list_custom_profiles()
+    if custom_profiles:
+        st.markdown(f"**{len(custom_profiles)} profil(s) personnalisé(s)**")
+        for cp in custom_profiles:
+            col_info, col_del = st.columns([4, 1])
+            with col_info:
+                st.markdown(f"- **{cp['name']}** : {cp.get('description', '')}")
+            with col_del:
+                if st.button("Supprimer", key=f"del_profile_{cp['id']}"):
+                    try:
+                        manager.delete_custom_profile(cp["id"])
+                        st.success(f"Profil '{cp['name']}' supprimé.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(str(e))
+    else:
+        st.info("Aucun profil personnalisé sauvegardé.")
+
+    # Save as custom profile
+    with st.form("save_custom_profile"):
+        profile_name = st.text_input("Nom du profil")
+        profile_desc = st.text_input("Description (optionnel)")
+
+        if st.form_submit_button("Sauvegarder comme profil personnalisé", type="primary"):
+            if profile_name:
+                try:
+                    manager.save_custom_profile(
+                        name=profile_name,
+                        description=profile_desc,
+                        config=config,
+                    )
+                    st.success(f"Profil '{profile_name}' sauvegardé.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+            else:
+                st.warning("Renseignez un nom pour le profil.")
 
 
 def _render_config_export_import():

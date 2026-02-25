@@ -38,6 +38,9 @@ def render():
 
     _render_docx_export(state)
 
+    # Phase 3: APA bibliography preview
+    _render_bibliography_preview(state)
+
     # Récapitulatif en bas de page
     st.markdown("---")
     with st.expander("Récapitulatif du projet"):
@@ -129,6 +132,64 @@ def _render_docx_export(state):
                     )
             except Exception as e:
                 st.error(f"Erreur : {e}")
+
+
+def _render_bibliography_preview(state):
+    """Phase 3: APA bibliography preview if citations are enabled."""
+    config = state.config
+    cit_config = config.get("citations", {})
+    if not cit_config.get("enabled", False):
+        return
+
+    st.markdown("---")
+    with st.expander("Bibliographie APA (Phase 3)", expanded=False):
+        project_id = st.session_state.current_project
+        project_dir = PROJECTS_DIR / project_id
+        metadata_db = project_dir / "metadata.db"
+
+        if not metadata_db.exists():
+            st.info("Aucune base de métadonnées disponible. La bibliographie sera vide.")
+            return
+
+        try:
+            from src.core.citation_engine import CitationEngine
+            from src.core.metadata_store import MetadataStore
+
+            store = MetadataStore(str(project_dir))
+            citation_engine = CitationEngine(metadata_store=store, enabled=True)
+
+            # Extract all inline citations from generated content
+            all_content = "\n\n".join(state.generated_sections.values())
+            citations = citation_engine.extract_inline_citations(all_content)
+
+            if citations:
+                resolved = citation_engine.resolve_citations(citations)
+                resolved_count = sum(1 for c in resolved if c.resolved_doc_id)
+                st.markdown(f"**{len(citations)} citation(s) inline détectée(s)** ({resolved_count} résolue(s))")
+
+            # Compile bibliography
+            bibliography = citation_engine.compile_bibliography()
+            store.close()
+
+            if bibliography:
+                st.markdown("**Bibliographie**")
+                for i, entry in enumerate(bibliography, 1):
+                    st.markdown(f"{i}. {entry.apa_reference}")
+            else:
+                # Show all documents as bibliography if no specific citations
+                store2 = MetadataStore(str(project_dir))
+                all_docs = store2.get_all_documents()
+                store2.close()
+
+                if all_docs:
+                    st.markdown("**Bibliographie (tous les documents du corpus)**")
+                    for i, doc in enumerate(all_docs, 1):
+                        apa = CitationEngine.format_apa_from_metadata(doc)
+                        st.markdown(f"{i}. {apa}")
+                else:
+                    st.info("Aucune entrée bibliographique disponible.")
+        except Exception as e:
+            st.warning(f"Impossible de générer la bibliographie : {e}")
 
 
 def _render_recap(state):

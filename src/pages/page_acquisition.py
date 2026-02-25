@@ -47,8 +47,11 @@ def render():
     st.markdown("---")
     _render_corpus_recap(corpus_dir)
 
-    # Inspection RAG
+    # Phase 3: GROBID status and metadata overrides
     project_dir = PROJECTS_DIR / project_id
+    _render_metadata_overrides(corpus_dir, project_dir)
+
+    # Inspection RAG
     _render_rag_inspection(project_dir)
 
 
@@ -277,6 +280,101 @@ def _render_corpus_recap(corpus_dir: Path):
                     save_json(PROJECTS_DIR / project_id / "state.json", state.to_dict())
             st.session_state.current_page = "plan"
             st.rerun()
+
+
+def _render_metadata_overrides(corpus_dir: Path, project_dir: Path):
+    """Phase 3: Metadata overrides and GROBID status per document."""
+    config = st.session_state.project_state.config if st.session_state.get("project_state") else {}
+    grobid_config = config.get("grobid", {})
+    grobid_enabled = grobid_config.get("enabled", False)
+
+    # Check if metadata store exists
+    metadata_db = project_dir / "metadata.db"
+    if not metadata_db.exists():
+        return
+
+    try:
+        from src.core.metadata_store import MetadataStore
+        store = MetadataStore(str(project_dir))
+        all_docs = store.get_all_documents()
+        store.close()
+    except Exception:
+        return
+
+    if not all_docs:
+        return
+
+    with st.expander("Métadonnées des documents (Phase 3)", expanded=False):
+        # GROBID status indicator
+        if grobid_enabled:
+            st.markdown("**GROBID** : Activé")
+            server_url = grobid_config.get("server_url", "http://localhost:8070")
+            try:
+                import requests
+                resp = requests.get(f"{server_url}/api/isalive", timeout=3)
+                if resp.status_code == 200:
+                    st.success(f"Serveur GROBID accessible ({server_url})")
+                else:
+                    st.warning(f"GROBID non accessible ({server_url})")
+            except Exception:
+                st.warning(f"Impossible de contacter GROBID ({server_url})")
+        else:
+            st.caption("GROBID désactivé — Activez-le dans Configuration > Phase 3")
+
+        st.markdown("---")
+
+        for doc in all_docs:
+            doc_id = doc.doc_id if hasattr(doc, 'doc_id') else doc.get("doc_id", "")
+            title = (doc.title if hasattr(doc, 'title') else doc.get("title")) or doc_id
+            authors = (doc.authors if hasattr(doc, 'authors') else doc.get("authors")) or ""
+            year = (doc.year if hasattr(doc, 'year') else doc.get("year")) or ""
+
+            col_info, col_action = st.columns([4, 1])
+            with col_info:
+                st.markdown(f"**{title}**")
+                st.caption(f"Auteurs : {authors or 'Non renseigné'} | Année : {year or 'Non renseignée'}")
+                if grobid_enabled:
+                    grobid_status = (doc.grobid_status if hasattr(doc, 'grobid_status') else None) or "non traité"
+                    status_icon = {"processed": "green", "failed": "red", "non traité": "gray"}.get(grobid_status, "gray")
+                    st.markdown(f"GROBID : :{status_icon}[{grobid_status}]")
+
+            with col_action:
+                if st.button("Corriger", key=f"override_{doc_id}"):
+                    st.session_state[f"_editing_meta_{doc_id}"] = True
+
+            # Inline editing form
+            if st.session_state.get(f"_editing_meta_{doc_id}", False):
+                with st.form(key=f"meta_form_{doc_id}"):
+                    new_title = st.text_input("Titre", value=title or "", key=f"meta_title_{doc_id}")
+                    new_authors = st.text_input("Auteurs", value=authors or "", key=f"meta_authors_{doc_id}")
+                    new_year = st.number_input("Année", value=int(year) if year else 2024, min_value=1900, max_value=2100, key=f"meta_year_{doc_id}")
+
+                    col_submit, col_cancel = st.columns(2)
+                    with col_submit:
+                        submitted = st.form_submit_button("Sauvegarder", type="primary")
+                    with col_cancel:
+                        cancelled = st.form_submit_button("Annuler")
+
+                    if submitted:
+                        try:
+                            from src.core.metadata_overrides import MetadataOverrides
+                            overrides = MetadataOverrides(project_dir=project_dir)
+                            overrides.set_override(
+                                doc_id=doc_id,
+                                title=new_title if new_title != title else None,
+                                authors=new_authors if new_authors != authors else None,
+                                year=int(new_year) if str(new_year) != str(year) else None,
+                            )
+                            st.success(f"Métadonnées corrigées pour {doc_id}")
+                            st.session_state[f"_editing_meta_{doc_id}"] = False
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erreur : {e}")
+                    if cancelled:
+                        st.session_state[f"_editing_meta_{doc_id}"] = False
+                        st.rerun()
+
+            st.markdown("---")
 
 
 def _display_report(report: AcquisitionReport):
