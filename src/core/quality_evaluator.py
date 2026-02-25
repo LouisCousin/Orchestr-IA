@@ -267,9 +267,10 @@ class QualityEvaluator:
     def _parse_ai_scores(response_text: str) -> dict:
         """Parse la réponse JSON de l'évaluation IA."""
         import json
+        from src.utils.string_utils import clean_json_string
 
-        # Try to extract JSON from the response
-        text = response_text.strip()
+        # Nettoyer les balises Markdown avant parsing
+        text = clean_json_string(response_text)
         # Find JSON block
         json_match = re.search(r'\{[\s\S]*\}', text)
         if json_match:

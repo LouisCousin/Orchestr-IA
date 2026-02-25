@@ -63,9 +63,14 @@ def normalize_text_for_hash(text: str) -> str:
 
 
 def sanitize_filename(name: str) -> str:
-    """Nettoie un nom pour l'utiliser comme nom de fichier."""
-    name = re.sub(r'[<>:"/\\|?*]', "_", name)
-    name = re.sub(r"\s+", "_", name)
+    """Nettoie un nom de fichier pour le rendre sûr.
+
+    Protège contre le path traversal et les caractères spéciaux.
+    """
+    # Sécurité contre path traversal : ne garder que le nom de base
+    name = Path(name).name
+    # Garder uniquement alphanumérique, tirets, underscores et points
+    name = re.sub(r'[^a-zA-Z0-9_.\-]', '_', name)
     name = name.strip("._")
     return name[:100] if name else "unnamed"
 

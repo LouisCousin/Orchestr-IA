@@ -4,7 +4,7 @@ import streamlit as st
 from pathlib import Path
 
 from src.utils.config import ROOT_DIR
-from src.utils.file_utils import ensure_dir, save_json
+from src.utils.file_utils import ensure_dir, save_json, sanitize_filename
 from src.utils.token_counter import count_tokens
 from src.core.corpus_acquirer import CorpusAcquirer, AcquisitionReport
 from src.core.text_extractor import extract
@@ -72,8 +72,9 @@ def _render_file_upload(corpus_dir: Path):
 
         progress = st.progress(0, text="Acquisition en cours...")
         for i, uploaded in enumerate(uploaded_files):
-            # Sauvegarder le fichier temporairement
-            temp_path = corpus_dir / f"_temp_{uploaded.name}"
+            # Sauvegarder le fichier temporairement (nom sanitisé)
+            safe_name = sanitize_filename(uploaded.name)
+            temp_path = corpus_dir / f"_temp_{safe_name}"
             temp_path.write_bytes(uploaded.getvalue())
 
             acquirer.acquire_local_files([temp_path], report)
@@ -130,7 +131,7 @@ def _render_url_acquisition(corpus_dir: Path):
 
         # URLs depuis le fichier
         if url_file:
-            temp_path = corpus_dir / f"_temp_{url_file.name}"
+            temp_path = corpus_dir / f"_temp_{sanitize_filename(url_file.name)}"
             temp_path.write_bytes(url_file.getvalue())
             try:
                 acquirer.acquire_urls_from_file(temp_path, report)
