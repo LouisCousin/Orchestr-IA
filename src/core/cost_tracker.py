@@ -78,8 +78,8 @@ class CostTracker:
             logger.warning(f"Tarifs non trouvés pour {provider}/{model}")
             return 0.0
 
-        input_cost = (input_tokens / 1_000_000) * pricing["input"]
-        output_cost = (output_tokens / 1_000_000) * pricing["output"]
+        input_cost = (input_tokens / 1_000_000) * pricing.get("input", 0)
+        output_cost = (output_tokens / 1_000_000) * pricing.get("output", 0)
         return input_cost + output_cost
 
     def record(

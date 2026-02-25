@@ -336,7 +336,7 @@ class TemplateLibrary:
         if not template:
             raise ValueError(f"Template {template_id} non trouvé")
 
-        variables = variables or {}
+        variables = dict(variables or {})
         content = template["content"]
         template_vars = {v["name"]: v for v in template.get("variables", [])}
 

@@ -274,7 +274,9 @@ class FactcheckEngine:
             return self._build_report(section_id, claims_data)
         except Exception as e:
             logger.warning(f"Factcheck combiné échoué pour {section_id}: {e}")
-            return FactcheckReport(section_id=section_id, reliability_score=100.0)
+            report = FactcheckReport(section_id=section_id, reliability_score=-1.0)
+            report.status_counts = {"error": str(e)}
+            return report
 
     def _extract_claims(self, content: str, model: str) -> list[dict]:
         """Étape 1 : extraction des affirmations vérifiables."""
