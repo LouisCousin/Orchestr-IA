@@ -1,5 +1,8 @@
 """Page de génération séquentielle du contenu (Phase 2+3 : multi-pass, agentique, RAG, qualité, factcheck)."""
 
+import copy
+import logging
+
 import streamlit as st
 from pathlib import Path
 
@@ -12,8 +15,6 @@ from src.core.cost_tracker import CostTracker
 from src.core.checkpoint_manager import CheckpointManager, CheckpointConfig
 from src.utils.providers_registry import PROVIDERS_INFO
 from src.utils.reference_cleaner import clean_source_references
-
-import logging
 
 logger = logging.getLogger("orchestria")
 
@@ -268,7 +269,7 @@ def _run_generation(state, provider, tracker):
         checkpoint_manager=checkpoint_mgr,
         cost_tracker=tracker,
         activity_log=activity_log,
-        config=state.config,
+        config=copy.deepcopy(state.config),
     )
     orchestrator.state = state
 
