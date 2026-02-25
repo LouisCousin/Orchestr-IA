@@ -248,7 +248,8 @@ class GlossaryEngine:
     def _parse_terms(response_text: str) -> list[dict]:
         """Parse la réponse JSON de l'IA."""
         import re
-        text = response_text.strip()
+        from src.utils.string_utils import clean_json_string
+        text = clean_json_string(response_text)
         json_match = re.search(r'\{[\s\S]*\}', text)
         if json_match:
             try:

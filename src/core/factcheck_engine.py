@@ -415,7 +415,8 @@ class FactcheckEngine:
     @staticmethod
     def _parse_json_response(text: str) -> dict:
         """Parse une réponse JSON de l'IA."""
-        text = text.strip()
+        from src.utils.string_utils import clean_json_string
+        text = clean_json_string(text)
         json_match = re.search(r'\{[\s\S]*\}', text)
         if json_match:
             try:

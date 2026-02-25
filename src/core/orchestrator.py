@@ -503,11 +503,13 @@ class Orchestrator:
         self.activity_log.info(f"Corpus indexé dans ChromaDB : {count} blocs")
         return count
 
-    def generate_all_sections(self, pass_number: int = 1) -> dict:
+    def generate_all_sections(self, pass_number: int = 1, progress_callback=None) -> dict:
         """Génère toutes les sections du plan séquentiellement.
 
         Args:
             pass_number: Numéro de la passe (1 = brouillon, 2+ = raffinement).
+            progress_callback: Optionnel, callable(message: str, percent: float)
+                pour notifier l'avancement (0.0 à 1.0).
 
         Returns:
             Dictionnaire section_id → contenu généré.
@@ -563,7 +565,11 @@ class Orchestrator:
             except Exception as e:
                 logger.warning(f"Génération automatique du glossaire échouée : {e}")
 
+        total = len(sections_to_generate)
         for i, section in enumerate(sections_to_generate):
+            if progress_callback:
+                progress_callback(f"Génération de la section : {section.title}...", i / max(total, 1))
+
             # Vérifier si la section est reportée (génération conditionnelle)
             if section.id in self.state.deferred_sections and not is_refinement:
                 self.activity_log.warning(
@@ -732,17 +738,21 @@ class Orchestrator:
 
             self.save_state()
 
+        if progress_callback:
+            progress_callback("Génération terminée !", 1.0)
+
         self.state.current_step = "review"
         self.state.cost_report = self.cost_tracker.report.to_dict()
         self.activity_log.success(f"Passe {pass_number} terminée pour toutes les sections")
         self.save_state()
         return self.state.generated_sections
 
-    def generate_multi_pass(self, num_passes: Optional[int] = None) -> dict:
+    def generate_multi_pass(self, num_passes: Optional[int] = None, progress_callback=None) -> dict:
         """Exécute la génération en passes multiples (brouillon + raffinements).
 
         Args:
             num_passes: Nombre total de passes. Si None, utilise la config.
+            progress_callback: Optionnel, callable(message: str, percent: float).
 
         Returns:
             Dictionnaire section_id → contenu final.
@@ -751,7 +761,7 @@ class Orchestrator:
 
         for pass_num in range(1, num_passes + 1):
             self.activity_log.info(f"=== Passe {pass_num}/{num_passes} ===")
-            self.generate_all_sections(pass_number=pass_num)
+            self.generate_all_sections(pass_number=pass_num, progress_callback=progress_callback)
 
             # Si un checkpoint a interrompu la génération, on s'arrête
             if self.state and self.state.current_step == "generation":
@@ -1059,6 +1069,11 @@ class Orchestrator:
         if state_path.exists():
             data = load_json(state_path)
             self.state = ProjectState.from_dict(data)
+            # Réhydratation du CostTracker depuis l'état persisté
+            if self.state and self.state.cost_report:
+                self.cost_tracker._report.total_input_tokens = self.state.cost_report.get("total_input_tokens", 0)
+                self.cost_tracker._report.total_output_tokens = self.state.cost_report.get("total_output_tokens", 0)
+                self.cost_tracker._report.total_cost_usd = self.state.cost_report.get("total_cost_usd", 0.0)
             return self.state
         return None
 
