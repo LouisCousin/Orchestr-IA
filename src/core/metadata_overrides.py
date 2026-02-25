@@ -131,15 +131,12 @@ class MetadataOverrides:
         # Appliquer les métadonnées GROBID (priorité moyenne)
         if grobid_data:
             for key, value in grobid_data.items():
-                if key in merged and value:
-                    # Map GROBID 'pages' to 'pages_range'
-                    if key == "pages":
-                        merged["pages_range"] = value
-                    else:
-                        merged[key] = value
-            # Handle pages mapping from GROBID
-            if "pages" in grobid_data and grobid_data["pages"]:
-                merged["pages_range"] = grobid_data["pages"]
+                if not value:
+                    continue
+                # Map GROBID 'pages' key to 'pages_range' in merged schema
+                target_key = "pages_range" if key == "pages" else key
+                if target_key in merged:
+                    merged[target_key] = value
 
         # Appliquer les overrides YAML (priorité maximale)
         overrides = self.load_override(doc_id)
