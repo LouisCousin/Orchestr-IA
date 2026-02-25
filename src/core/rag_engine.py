@@ -310,7 +310,7 @@ class RAGEngine:
         if results and results["documents"] and results["documents"][0]:
             for i, doc in enumerate(results["documents"][0]):
                 distance = results["distances"][0][i] if results["distances"] else 0
-                similarity = 1.0 - distance
+                similarity = max(0.0, 1.0 - distance)
 
                 metadata = results["metadatas"][0][i] if results["metadatas"] else {}
                 token_estimate = metadata.get("token_estimate", metadata.get("token_count", len(doc) // 4))
@@ -485,7 +485,7 @@ class RAGEngine:
         if results and results["documents"] and results["documents"][0]:
             for i, doc in enumerate(results["documents"][0]):
                 distance = results["distances"][0][i] if results["distances"] else 0
-                similarity = 1.0 - distance
+                similarity = max(0.0, 1.0 - distance)
                 metadata = results["metadatas"][0][i] if results["metadatas"] else {}
 
                 candidates.append(ScoredChunk(
@@ -506,8 +506,11 @@ class RAGEngine:
                 from src.core.reranker import Reranker
                 reranker = Reranker.get_instance()
                 candidates = reranker.rerank(query, candidates, top_k=top_k)
-            except (ImportError, Exception) as e:
-                logger.warning(f"Reranking indisponible : {e}")
+            except ImportError:
+                logger.warning("Reranker non disponible")
+                candidates = candidates[:top_k]
+            except Exception as e:
+                logger.warning(f"Erreur reranking : {e}")
                 candidates = candidates[:top_k]
         else:
             candidates = candidates[:top_k]

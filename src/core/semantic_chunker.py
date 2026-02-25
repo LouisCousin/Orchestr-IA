@@ -65,7 +65,7 @@ def _split_into_sentence_groups(text: str, max_chunk_tokens: int) -> list[str]:
     sentences = _split_sentences(text)
     if len(sentences) <= 1:
         # Dernier recours : découpage brut par caractères
-        max_chars = max_chunk_tokens * 3
+        max_chars = max_chunk_tokens * 4  # consistent with _count_tokens: ~4 chars/token
         return [text[i:i + max_chars] for i in range(0, len(text), max_chars)]
 
     groups = []
@@ -206,7 +206,7 @@ def _chunk_by_tokens(
     if not text or not text.strip():
         return []
 
-    max_chars = max_chunk_tokens * 3  # ~3 chars per token in French
+    max_chars = max_chunk_tokens * 4  # consistent with _count_tokens: ~4 chars/token
     chunks: list[Chunk] = []
     paragraphs = text.split("\n\n")
     buffer = ""

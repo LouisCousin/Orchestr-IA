@@ -57,10 +57,19 @@ class ProjectState:
         self.updated_at = datetime.now().isoformat()
 
     def to_dict(self) -> dict:
+        # Serialize corpus source files for reload detection (full text is in ChromaDB)
+        corpus_info = None
+        if self.corpus:
+            corpus_info = {
+                "source_files": self.corpus.source_files,
+                "total_chunks": self.corpus.total_chunks,
+                "total_tokens": self.corpus.total_tokens,
+            }
         return {
             "name": self.name,
             "user_id": self.user_id,
             "plan": self.plan.to_dict() if self.plan else None,
+            "corpus_info": corpus_info,
             "generated_sections": self.generated_sections,
             "section_summaries": self.section_summaries,
             "current_step": self.current_step,
@@ -424,7 +433,7 @@ class Orchestrator:
                         self._citation_engine.metadata_store = metadata_store
                     return count
 
-            except Exception as e:
+            except (ImportError, ValueError, RuntimeError, OSError) as e:
                 logger.warning(f"Chunking sémantique échoué, fallback chunking fixe : {e}")
 
         # Fallback : ancien chunking fixe (Phase 2)
@@ -477,13 +486,14 @@ class Orchestrator:
             logger.warning(f"Initialisation Phase 3 échouée : {e}")
 
         # Initialiser RAG et génération conditionnelle si corpus disponible
-        use_rag = self.state.corpus and self.rag_engine is not None
-        if self.state.corpus:
+        # Also check for persisted ChromaDB data (corpus may be None after state reload)
+        has_persisted_rag = (self.project_dir / "chromadb").exists()
+        if self.state.corpus or has_persisted_rag:
             self._init_rag()
             self._init_conditional_generator()
-            if self.rag_engine and self.rag_engine.indexed_count == 0:
+            if self.state.corpus and self.rag_engine and self.rag_engine.indexed_count == 0:
                 self.index_corpus_rag()
-            use_rag = self.rag_engine is not None and self.rag_engine.indexed_count > 0
+        use_rag = self.rag_engine is not None and self.rag_engine.indexed_count > 0
 
         # Phase 3: Auto-generate glossary before first generation
         if (
@@ -650,7 +660,14 @@ class Orchestrator:
                 if self.is_agentic:
                     continue  # En mode agentique, on continue
                 else:
-                    continue  # En mode manuel aussi, mais pourrait être interrompu
+                    # En mode manuel, créer un checkpoint pour informer l'utilisateur
+                    if self.checkpoint_mgr:
+                        self.checkpoint_mgr.create_checkpoint(
+                            step=f"error_{section.id}",
+                            data={"error": str(e), "section_id": section.id},
+                            message=f"Erreur lors de la génération de {section.title}: {e}",
+                        )
+                    continue
 
             # Checkpoint après génération (mode manuel uniquement)
             if not self.is_agentic and self.checkpoint_mgr.should_pause(CheckpointType.GENERATION):
@@ -748,12 +765,19 @@ class Orchestrator:
                     section_description=section.description or "",
                 )
                 self.state.factcheck_reports[section.id] = fc_report.to_dict()
-                factcheck_score = fc_report.reliability_score
-                self.activity_log.info(
-                    f"Factcheck {section.id}: {fc_report.reliability_score:.0f}% "
-                    f"({fc_report.total_claims} affirmations)",
-                    section=section.id,
-                )
+                # A score of -1.0 means the factcheck failed; treat as unavailable
+                if fc_report.reliability_score >= 0:
+                    factcheck_score = fc_report.reliability_score
+                    self.activity_log.info(
+                        f"Factcheck {section.id}: {fc_report.reliability_score:.0f}% "
+                        f"({fc_report.total_claims} affirmations)",
+                        section=section.id,
+                    )
+                else:
+                    self.activity_log.warning(
+                        f"Factcheck {section.id}: vérification échouée, score indisponible",
+                        section=section.id,
+                    )
             except Exception as e:
                 logger.warning(f"Factcheck échoué pour {section.id}: {e}")
 
@@ -956,6 +980,7 @@ class Orchestrator:
                         f"de contexte du modèle {model} ({window} tokens)"
                     )
                 return
+        logger.debug(f"Modèle {model} non trouvé dans les tarifs, vérification de contexte ignorée")
 
     def save_state(self) -> None:
         """Sauvegarde l'état du projet sur disque."""

@@ -58,7 +58,9 @@ class NormalizedPlan:
                     "parent_id": s.parent_id,
                     "description": s.description,
                     "page_budget": s.page_budget,
+                    "generated_content": s.generated_content,
                     "status": s.status,
+                    "metadata": s.metadata,
                 }
                 for s in self.sections
             ],
@@ -79,7 +81,9 @@ class NormalizedPlan:
                 parent_id=s.get("parent_id"),
                 description=s.get("description", ""),
                 page_budget=s.get("page_budget"),
+                generated_content=s.get("generated_content"),
                 status=s.get("status", "pending"),
+                metadata=s.get("metadata", {}),
             ))
         return plan
 
