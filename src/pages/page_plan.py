@@ -433,7 +433,7 @@ def _render_persona_section(state, plan):
         persona_names = ["(Principal)"] + list(persona_options.keys())
 
         for section in plan.sections:
-            current_assignment = persona_engine._section_assignments.get(section.id)
+            current_assignment = persona_engine.get_section_assignment(section.id)
             current_persona_name = "(Principal)"
             for p in personas:
                 if p["id"] == current_assignment:
@@ -453,8 +453,7 @@ def _render_persona_section(state, plan):
                     persona_engine.assign_to_section(section.id, pid)
             elif selected == "(Principal)" and current_assignment:
                 # Remove specific assignment (use primary)
-                persona_engine._section_assignments.pop(section.id, None)
-                persona_engine._save()
+                persona_engine.clear_section_assignment(section.id)
 
 
 def _save_state(state):

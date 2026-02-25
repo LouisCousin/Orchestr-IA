@@ -121,11 +121,11 @@ def _render_template_detail(library: TemplateLibrary):
         with st.container():
             c1, c2, c3 = st.columns([2, 3, 2])
             with c1:
-                name = st.text_input("Nom", value=var.get("name", ""), key=f"var_name_{i}")
+                name = st.text_input("Nom", value=var.get("name", ""), key=f"var_name_{selected_id}_{i}")
             with c2:
-                desc = st.text_input("Description", value=var.get("description", ""), key=f"var_desc_{i}")
+                desc = st.text_input("Description", value=var.get("description", ""), key=f"var_desc_{selected_id}_{i}")
             with c3:
-                default = st.text_input("Défaut", value=var.get("default", ""), key=f"var_def_{i}")
+                default = st.text_input("Défaut", value=var.get("default", ""), key=f"var_def_{selected_id}_{i}")
             edited_vars.append({
                 "name": name,
                 "description": desc,
@@ -180,11 +180,11 @@ def _render_template_detail(library: TemplateLibrary):
     st.markdown("**Aperçu du prompt résolu**")
     with st.expander("Résoudre les variables"):
         var_values = {}
-        for var in variables:
+        for i, var in enumerate(variables):
             val = st.text_input(
                 f"{var['name']}",
                 value=var.get("default", ""),
-                key=f"resolve_{var['name']}",
+                key=f"resolve_{selected_id}_{i}_{var['name']}",
             )
             var_values[var["name"]] = val
 

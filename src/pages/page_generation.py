@@ -174,7 +174,7 @@ def _render_launch_and_progress(state, provider):
 
     effective_total = total_sections - deferred
     if effective_total > 0:
-        st.progress(already_generated / effective_total, text=f"{already_generated}/{effective_total} sections")
+        st.progress(min(already_generated / effective_total, 1.0), text=f"{already_generated}/{effective_total} sections")
 
     # Estimation des coûts
     tracker = st.session_state.get("cost_tracker") or CostTracker()
