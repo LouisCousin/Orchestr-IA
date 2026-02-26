@@ -48,6 +48,11 @@ python-dotenv>=1.0.0
 plotly>=5.18.0
 python-Levenshtein>=0.25.0
 
+# Phase 4 — Performance & Async
+aiohttp>=3.9.0         # Téléchargement asynchrone (corpus_acquirer)
+aiofiles>=23.0.0       # Écriture disque non-bloquante (corpus_acquirer)
+psutil>=5.9.0          # Gestion dynamique RAM/CPU (text_extractor)
+
 # Testing
 pytest>=8.0.0
 pytest-cov>=4.1.0

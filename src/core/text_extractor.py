@@ -2,11 +2,14 @@
 
 Supporte : PDF (docling → pymupdf → pdfplumber → PyPDF2), DOCX, HTML, TXT/MD, Excel/CSV.
 Phase 2.5 : ajout de Docling comme extracteur PDF prioritaire avec structure sémantique.
+Phase 4 (Perf) : parallélisation ProcessPoolExecutor + psutil pour gestion dynamique des ressources,
+                  cache par hash pour éviter les ré-extractions, singleton DocumentConverter par worker.
 """
 
 import gc
 import logging
 import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -157,6 +160,109 @@ def _extract_sections_from_docling_result(result) -> list[dict]:
     return sections
 
 
+# --- Gestion dynamique des ressources (Smart Resources) ---
+
+
+def _compute_optimal_workers() -> int:
+    """Calcule le nombre optimal de workers selon RAM et CPU disponibles.
+
+    Formule : workers = min(CPU_COUNT, (RAM_DISPO_GB - 2GB_SECURITY) // 1.5GB_PER_WORKER)
+    Fallback : toujours au moins 1 worker.
+    """
+    try:
+        import psutil
+        ram_available_gb = psutil.virtual_memory().available / (1024 ** 3)
+        cpu_count = os.cpu_count() or 1
+        ram_workers = int((ram_available_gb - 2.0) / 1.5)
+        workers = max(1, min(cpu_count, ram_workers))
+        logger.info(
+            f"Smart Resources : RAM dispo={ram_available_gb:.1f}GB, "
+            f"CPU={cpu_count}, workers calculés={workers}"
+        )
+        return workers
+    except ImportError:
+        logger.warning("psutil non disponible, fallback à 1 worker")
+        return 1
+    except Exception as e:
+        logger.warning(f"Erreur calcul workers : {e}, fallback à 1")
+        return 1
+
+
+# --- Worker Multiprocessing pour extraction Docling parallèle ---
+
+# Variables globales du worker (initialisées une seule fois par processus)
+_worker_converter = None
+_worker_pdf_cfg = None
+
+
+def _init_docling_worker(pdf_cfg: dict) -> None:
+    """Initializer pour ProcessPoolExecutor : charge DocumentConverter une seule fois par worker."""
+    global _worker_converter, _worker_pdf_cfg
+    _worker_pdf_cfg = pdf_cfg
+    _worker_converter = _create_docling_converter(pdf_cfg)
+    logger.info("Worker Docling initialisé (DocumentConverter chargé)")
+
+
+def _docling_worker_extract_batch(args: tuple) -> list[dict]:
+    """Fonction worker : extrait une plage de pages depuis un PDF.
+
+    Args:
+        args: Tuple (path_str, start_page, end_page).
+
+    Returns:
+        Liste de sections extraites (dicts).
+    """
+    global _worker_converter
+    path_str, start, end = args
+    _logger = logging.getLogger("orchestria")
+
+    try:
+        from docling.datamodel.settings import PageRange
+        path = Path(path_str)
+        page_range: PageRange = (start, end)
+        result = _worker_converter.convert(str(path), page_range=page_range)
+        sections = _extract_sections_from_docling_result(result)
+        _logger.info(f"  Worker lot pages {start}-{end} → {len(sections)} éléments")
+        del result
+        gc.collect()
+        return sections
+    except Exception as e:
+        _logger.warning(f"  Worker échec lot pages {start}-{end}: {e}")
+        return []
+
+
+# --- Cache d'extraction par hash ---
+
+
+def is_extraction_cached(path: Path, metadata_store) -> bool:
+    """Vérifie si un fichier a déjà été extrait avec succès via son hash binaire.
+
+    Args:
+        path: Chemin du fichier à vérifier.
+        metadata_store: Instance de MetadataStore.
+
+    Returns:
+        True si l'extraction est déjà complète dans le store.
+    """
+    if metadata_store is None:
+        return False
+    try:
+        file_hash = sha256_file(path)
+        if not file_hash:
+            return False
+        conn = metadata_store._get_conn()
+        row = conn.execute(
+            "SELECT extraction_status FROM documents WHERE hash_binary = ? AND extraction_status = 'success'",
+            (file_hash,),
+        ).fetchone()
+        if row:
+            logger.info(f"Cache hit : {path.name} déjà extrait (hash={file_hash[:12]}...)")
+            return True
+    except Exception as e:
+        logger.debug(f"Erreur vérification cache pour {path.name}: {e}")
+    return False
+
+
 def _get_pdf_page_count(path: Path) -> int:
     """Obtient le nombre de pages d'un PDF via pypdfium2 ou fitz."""
     try:
@@ -183,14 +289,14 @@ def _extract_pdf_docling(path: Path) -> tuple[str, int, list[dict], str | None, 
 
     Inclut :
     - Options de pipeline optimisées (pas d'images, backend PyPdfium2)
-    - Traitement par lots pour les gros PDF (>50 pages)
+    - Traitement parallèle par lots via ProcessPoolExecutor pour les gros PDF (>50 pages)
+    - Singleton DocumentConverter par worker (chargé une seule fois)
+    - Gestion dynamique des workers via psutil (RAM/CPU)
     - Détection de couverture et rattrapage pymupdf pour les pages manquantes
 
     Returns:
         Tuple (texte_complet, nombre_pages, structure_sémantique, titre, méthode, statut).
     """
-    from docling.datamodel.settings import PageRange
-
     pdf_cfg = _load_pdf_extraction_config()
     batch_threshold = pdf_cfg["docling_batch_threshold"]
     batch_size = pdf_cfg["docling_page_batch_size"]
@@ -206,30 +312,57 @@ def _extract_pdf_docling(path: Path) -> tuple[str, int, list[dict], str | None, 
     method = "docling"
 
     if total_pages > batch_threshold:
-        # ── Mode batch : traiter par lots de pages ──
-        logger.info(
-            f"PDF volumineux ({total_pages} pages), traitement par lots de {batch_size} pages"
-        )
+        # ── Mode batch parallèle : ProcessPoolExecutor avec singleton Docling ──
+        max_workers = _compute_optimal_workers()
+
+        # Construire les plages de pages
+        page_ranges = []
         for start in range(1, total_pages + 1, batch_size):
             end = min(start + batch_size - 1, total_pages)
-            logger.info(f"  Lot pages {start}-{end}/{total_pages}")
-            try:
-                converter = _create_docling_converter(pdf_cfg)
-                page_range: PageRange = (start, end)
-                result = converter.convert(str(path), page_range=page_range)
-                batch_sections = _extract_sections_from_docling_result(result)
-                sections.extend(batch_sections)
-                logger.info(f"  → {len(batch_sections)} éléments extraits")
-            except Exception as e:
-                logger.warning(f"  Échec du lot pages {start}-{end}: {e}")
-            finally:
-                # Libérer la mémoire entre chaque lot (contournement fuite mémoire docling-parse)
+            page_ranges.append((str(path), start, end))
+
+        logger.info(
+            f"PDF volumineux ({total_pages} pages), {len(page_ranges)} lots, "
+            f"{max_workers} workers parallèles"
+        )
+
+        try:
+            with ProcessPoolExecutor(
+                max_workers=max_workers,
+                initializer=_init_docling_worker,
+                initargs=(pdf_cfg,),
+            ) as executor:
+                futures = {
+                    executor.submit(_docling_worker_extract_batch, args): args
+                    for args in page_ranges
+                }
+                for future in as_completed(futures):
+                    args = futures[future]
+                    try:
+                        batch_sections = future.result()
+                        sections.extend(batch_sections)
+                    except Exception as e:
+                        logger.warning(f"  Échec lot pages {args[1]}-{args[2]}: {e}")
+        except Exception as e:
+            logger.warning(f"Échec ProcessPoolExecutor, fallback séquentiel : {e}")
+            # Fallback séquentiel en cas d'erreur du pool
+            from docling.datamodel.settings import PageRange
+            for path_str, start, end in page_ranges:
                 try:
-                    del converter
-                    del result
-                except NameError:
-                    pass
-                gc.collect()
+                    converter = _create_docling_converter(pdf_cfg)
+                    page_range: PageRange = (start, end)
+                    result = converter.convert(str(path), page_range=page_range)
+                    batch_sections = _extract_sections_from_docling_result(result)
+                    sections.extend(batch_sections)
+                except Exception as batch_err:
+                    logger.warning(f"  Échec lot séquentiel pages {start}-{end}: {batch_err}")
+                finally:
+                    try:
+                        del converter
+                        del result
+                    except NameError:
+                        pass
+                    gc.collect()
     else:
         # ── Mode single-pass : PDF de taille modérée ──
         converter = None
@@ -615,8 +748,22 @@ def extract_text_file(path: Path) -> ExtractionResult:
 
 # --- Routeur principal ---
 
-def extract(path: Path) -> ExtractionResult:
-    """Extrait le texte d'un fichier selon son extension."""
+def extract(path: Path, metadata_store=None) -> ExtractionResult:
+    """Extrait le texte d'un fichier selon son extension.
+
+    Args:
+        path: Chemin du fichier à extraire.
+        metadata_store: Instance optionnelle de MetadataStore pour vérifier le cache.
+            Si le fichier est déjà extrait (hash_binary match, status=success), retourne
+            un résultat "cached" sans ré-extraction.
+    """
+    # Vérification cache avant extraction
+    if metadata_store is not None and is_extraction_cached(path, metadata_store):
+        return _make_result(
+            path, text="", page_count=0, method="cached",
+            status="cached",
+        )
+
     ext = path.suffix.lower()
     if ext == ".pdf":
         return extract_pdf(path)
