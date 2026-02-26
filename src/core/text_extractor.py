@@ -25,6 +25,10 @@ from src.utils.file_utils import ensure_dir, sha256_file, sha256_text
 
 logger = logging.getLogger("orchestria")
 
+# Silence les warnings ScriptRunContext des workers parallèles (ProcessPoolExecutor)
+# qui perdent le lien avec la session Streamlit utilisateur.
+logging.getLogger("streamlit.runtime.scriptrunner.script_runner").setLevel(logging.ERROR)
+
 CACHE_DIR = ROOT_DIR / "data" / "cache"
 
 
@@ -481,50 +485,52 @@ def _extract_pdf_docling(path: Path) -> tuple[str, int, list[dict], str | None, 
                 del result
             gc.collect()
 
-    # ── Détection de couverture et rattrapage pymupdf ──
-    if total_pages > 0:
-        pages_covered = set()
-        for section in sections:
-            if section.get("page"):
-                pages_covered.add(section["page"])
-        coverage_ratio = len(pages_covered) / total_pages
-    else:
-        coverage_ratio = 1.0  # pas de référence, on considère OK
+    # ── Validation basée sur le contenu (anti "faux-négatifs") ──
+    # Si Docling a extrait du texte significatif (>50 chars), on accepte directement
+    # sans vérifier la couverture par pages (qui peut être mal détectée).
+    # Cela évite le fallback coûteux vers PyMuPDF pour les PDFs lisibles.
+    preliminary_text = "\n".join(s["text"] for s in sections)
+    has_content = len(preliminary_text.strip()) > 50
 
-    if total_pages > 0 and coverage_ratio < coverage_threshold:
-        missing_pages = set(range(1, total_pages + 1)) - pages_covered
-        logger.warning(
-            f"Docling n'a couvert que {len(pages_covered)}/{total_pages} pages "
-            f"({coverage_ratio:.0%}), rattrapage pymupdf pour {len(missing_pages)} pages manquantes"
-        )
-        try:
-            import fitz
-            doc = fitz.open(str(path))
-            recovered = 0
-            for page_num in sorted(missing_pages):
-                page = doc[page_num - 1]  # fitz est 0-indexed
-                page_text = page.get_text()
-                if page_text.strip():
-                    sections.append({
-                        "text": page_text,
-                        "type": "paragraph",
-                        "page": page_num,
-                        "level": 0,
-                    })
-                    recovered += 1
-            doc.close()
-            logger.info(f"Rattrapage pymupdf : {recovered} pages récupérées sur {len(missing_pages)} manquantes")
-            method = "docling+pymupdf"
-        except ImportError:
-            logger.warning("pymupdf non disponible pour le rattrapage des pages manquantes")
-        except Exception as e:
-            logger.warning(f"Échec du rattrapage pymupdf : {e}")
+    if not has_content:
+        # ── Pas de contenu significatif — tentative de rattrapage pymupdf ──
+        if total_pages > 0:
+            pages_covered = set()
+            for section in sections:
+                if section.get("page"):
+                    pages_covered.add(section["page"])
+            missing_pages = set(range(1, total_pages + 1)) - pages_covered
+        else:
+            missing_pages = set()
 
-    # Recalculer la couverture après rattrapage pymupdf
-    if method == "docling+pymupdf" and total_pages > 0:
-        pages_covered_after = set(s.get("page") for s in sections if s.get("page"))
-        coverage_ratio = len(pages_covered_after) / total_pages
-        logger.info(f"Couverture après rattrapage : {coverage_ratio:.0%}")
+        if missing_pages:
+            logger.warning(
+                f"Docling n'a pas extrait de contenu significatif pour {path.name}, "
+                f"rattrapage pymupdf pour {len(missing_pages)} pages"
+            )
+            try:
+                import fitz
+                doc = fitz.open(str(path))
+                recovered = 0
+                for page_num in sorted(missing_pages):
+                    page = doc[page_num - 1]  # fitz est 0-indexed
+                    page_text = page.get_text()
+                    if page_text.strip():
+                        sections.append({
+                            "text": page_text,
+                            "type": "paragraph",
+                            "page": page_num,
+                            "level": 0,
+                        })
+                        recovered += 1
+                doc.close()
+                if recovered:
+                    logger.info(f"Rattrapage pymupdf : {recovered} pages récupérées")
+                    method = "docling+pymupdf"
+            except ImportError:
+                logger.warning("pymupdf non disponible pour le rattrapage des pages manquantes")
+            except Exception as e:
+                logger.warning(f"Échec du rattrapage pymupdf : {e}")
 
     # ── Reconstruction du résultat ──
     sections.sort(key=lambda s: s.get("page") or 0)
@@ -532,15 +538,14 @@ def _extract_pdf_docling(path: Path) -> tuple[str, int, list[dict], str | None, 
     page_count = total_pages if total_pages > 0 else max(
         (s.get("page") or 0 for s in sections), default=1
     )
+    if page_count == 0:
+        page_count = 1
 
-    # Déterminer le statut
-    if coverage_ratio >= coverage_threshold:
+    # Déterminer le statut basé sur le contenu réel
+    if len(full_text.strip()) > 50:
         status = "success"
-    elif coverage_ratio >= 0.50:
-        status = "partial"
     else:
-        status = "partial"
-        logger.warning(f"Couverture faible même après rattrapage : {coverage_ratio:.0%}")
+        status = "failed"
 
     # Extraire le titre depuis le premier heading
     title = None

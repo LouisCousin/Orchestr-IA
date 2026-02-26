@@ -1,4 +1,4 @@
-"""Tests unitaires pour le module local_embedder (Phase 2.5)."""
+"""Tests unitaires pour le module local_embedder (Phase 2.5 — FastEmbed)."""
 
 import pytest
 from unittest.mock import patch, MagicMock
@@ -54,13 +54,13 @@ class TestEmbedDocuments:
     @patch("src.core.local_embedder.LocalEmbedder._load_model")
     def test_embed_documents_adds_passage_prefix(self, mock_load):
         mock_model = MagicMock()
-        mock_model.encode.return_value = np.zeros((2, 1024))
+        mock_model.embed.return_value = iter([np.zeros(1024), np.zeros(1024)])
         mock_load.return_value = mock_model
 
         embedder = LocalEmbedder()
         embedder.embed_documents(["texte 1", "texte 2"])
 
-        call_args = mock_model.encode.call_args
+        call_args = mock_model.embed.call_args
         texts = call_args[0][0]
         assert texts[0] == "passage: texte 1"
         assert texts[1] == "passage: texte 2"
@@ -68,7 +68,9 @@ class TestEmbedDocuments:
     @patch("src.core.local_embedder.LocalEmbedder._load_model")
     def test_embed_documents_returns_list_of_lists(self, mock_load):
         mock_model = MagicMock()
-        mock_model.encode.return_value = np.random.randn(3, 1024)
+        mock_model.embed.return_value = iter([
+            np.random.randn(1024) for _ in range(3)
+        ])
         mock_load.return_value = mock_model
 
         embedder = LocalEmbedder()
@@ -80,27 +82,39 @@ class TestEmbedDocuments:
         assert len(result[0]) == 1024
 
     @patch("src.core.local_embedder.LocalEmbedder._load_model")
-    def test_embed_documents_normalize_embeddings(self, mock_load):
+    def test_embed_documents_returns_native_floats(self, mock_load):
         mock_model = MagicMock()
-        mock_model.encode.return_value = np.ones((1, 1024))
+        mock_model.embed.return_value = iter([np.ones(1024)])
+        mock_load.return_value = mock_model
+
+        embedder = LocalEmbedder()
+        result = embedder.embed_documents(["texte"])
+
+        # Vérifie que les valeurs sont des float Python natifs, pas np.float32
+        assert isinstance(result[0][0], float)
+
+    @patch("src.core.local_embedder.LocalEmbedder._load_model")
+    def test_embed_documents_custom_batch_size(self, mock_load):
+        mock_model = MagicMock()
+        mock_model.embed.return_value = iter([np.zeros(1024)])
+        mock_load.return_value = mock_model
+
+        embedder = LocalEmbedder()
+        embedder.embed_documents(["texte"], batch_size=32)
+
+        call_kwargs = mock_model.embed.call_args[1]
+        assert call_kwargs["batch_size"] == 32
+
+    @patch("src.core.local_embedder.LocalEmbedder._load_model")
+    def test_embed_documents_default_batch_size(self, mock_load):
+        mock_model = MagicMock()
+        mock_model.embed.return_value = iter([np.zeros(1024)])
         mock_load.return_value = mock_model
 
         embedder = LocalEmbedder()
         embedder.embed_documents(["texte"])
 
-        call_kwargs = mock_model.encode.call_args[1]
-        assert call_kwargs["normalize_embeddings"] is True
-
-    @patch("src.core.local_embedder.LocalEmbedder._load_model")
-    def test_embed_documents_custom_batch_size(self, mock_load):
-        mock_model = MagicMock()
-        mock_model.encode.return_value = np.zeros((1, 1024))
-        mock_load.return_value = mock_model
-
-        embedder = LocalEmbedder()
-        embedder.embed_documents(["texte"], batch_size=16)
-
-        call_kwargs = mock_model.encode.call_args[1]
+        call_kwargs = mock_model.embed.call_args[1]
         assert call_kwargs["batch_size"] == 16
 
 
@@ -108,19 +122,20 @@ class TestEmbedQuery:
     @patch("src.core.local_embedder.LocalEmbedder._load_model")
     def test_embed_query_adds_query_prefix(self, mock_load):
         mock_model = MagicMock()
-        mock_model.encode.return_value = np.zeros(1024)
+        mock_model.embed.return_value = iter([np.zeros(1024)])
         mock_load.return_value = mock_model
 
         embedder = LocalEmbedder()
         embedder.embed_query("ma requête")
 
-        call_args = mock_model.encode.call_args
-        assert call_args[0][0] == "query: ma requête"
+        call_args = mock_model.embed.call_args
+        texts = call_args[0][0]
+        assert texts[0] == "query: ma requête"
 
     @patch("src.core.local_embedder.LocalEmbedder._load_model")
     def test_embed_query_returns_list(self, mock_load):
         mock_model = MagicMock()
-        mock_model.encode.return_value = np.random.randn(1024)
+        mock_model.embed.return_value = iter([np.random.randn(1024)])
         mock_load.return_value = mock_model
 
         embedder = LocalEmbedder()
@@ -130,16 +145,16 @@ class TestEmbedQuery:
         assert len(result) == 1024
 
     @patch("src.core.local_embedder.LocalEmbedder._load_model")
-    def test_embed_query_normalize_embeddings(self, mock_load):
+    def test_embed_query_returns_native_floats(self, mock_load):
         mock_model = MagicMock()
-        mock_model.encode.return_value = np.zeros(1024)
+        mock_model.embed.return_value = iter([np.ones(1024)])
         mock_load.return_value = mock_model
 
         embedder = LocalEmbedder()
-        embedder.embed_query("test")
+        result = embedder.embed_query("test")
 
-        call_kwargs = mock_model.encode.call_args[1]
-        assert call_kwargs["normalize_embeddings"] is True
+        # Vérifie que les valeurs sont des float Python natifs, pas np.float32
+        assert isinstance(result[0], float)
 
 
 class TestLazyLoading:
@@ -150,7 +165,7 @@ class TestLazyLoading:
     @patch("src.core.local_embedder.LocalEmbedder._load_model")
     def test_model_loaded_on_embed(self, mock_load):
         mock_model = MagicMock()
-        mock_model.encode.return_value = np.zeros(1024)
+        mock_model.embed.return_value = iter([np.zeros(1024)])
         mock_load.return_value = mock_model
 
         embedder = LocalEmbedder()
