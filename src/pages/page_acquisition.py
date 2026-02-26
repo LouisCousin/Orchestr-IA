@@ -7,7 +7,7 @@ from src.utils.config import ROOT_DIR
 from src.utils.file_utils import ensure_dir, save_json, sanitize_filename
 from src.utils.token_counter import count_tokens
 from src.core.corpus_acquirer import CorpusAcquirer, AcquisitionReport
-from src.core.text_extractor import extract
+from src.core.text_extractor import extract, clear_cache
 from src.core.corpus_deduplicator import CorpusDeduplicator
 from src.core.cost_tracker import CostTracker
 from src.utils.content_validator import is_antibot_page
@@ -160,6 +160,14 @@ def _render_corpus_recap(corpus_dir: Path):
         st.info("Aucun document dans le corpus. Ajoutez des fichiers ou URLs ci-dessus.")
         return
 
+    # Gestion du bouton "Forcer la ré-extraction" : vider le cache avant l'analyse
+    force_files = set()
+    for f in files:
+        if st.session_state.get(f"_force_extract_{f.name}", False):
+            clear_cache(f)
+            force_files.add(f.name)
+            st.session_state[f"_force_extract_{f.name}"] = False
+
     # Analyse du corpus
     documents_info = []
     deduplicator = CorpusDeduplicator(corpus_dir)
@@ -167,7 +175,8 @@ def _render_corpus_recap(corpus_dir: Path):
 
     with st.spinner("Analyse du corpus..."):
         for f in files:
-            result = extract(f)
+            force = f.name in force_files
+            result = extract(f, force=force)
             extractions.append(result)
 
             tokens = count_tokens(result.text) if result.text else 0
@@ -201,6 +210,16 @@ def _render_corpus_recap(corpus_dir: Path):
     import pandas as pd
     df = pd.DataFrame(documents_info)
     st.dataframe(df, use_container_width=True, hide_index=True)
+
+    # Boutons de ré-extraction par fichier
+    st.caption("Forcer la ré-extraction d'un fichier (vide le cache) :")
+    cols = st.columns(min(len(files), 4))
+    for idx, f in enumerate(files):
+        with cols[idx % min(len(files), 4)]:
+            if st.button("♻️", key=f"reload_{f.name}", help=f"Forcer la ré-extraction de {f.name}"):
+                st.session_state[f"_force_extract_{f.name}"] = True
+                st.toast(f"Cache vidé pour {f.name}")
+                st.rerun()
 
     # Statistiques agrégées
     total_tokens = sum(d["Tokens"] for d in documents_info)
