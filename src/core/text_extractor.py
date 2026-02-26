@@ -5,21 +5,110 @@ Phase 2.5 : ajout de Docling comme extracteur PDF prioritaire avec structure sé
 Phase 4 (Perf) : parallélisation ProcessPoolExecutor + psutil pour gestion dynamique des ressources,
                   cache par hash pour éviter les ré-extractions, singleton DocumentConverter par worker.
                   compute_optimal_workers() est publique pour réutilisation par d'autres modules.
+Phase 5 (Cache) : cache JSON disque dans data/cache/ indexé par MD5(contenu+mtime),
+                   clear_cache() pour invalidation manuelle.
 """
 
 import gc
+import hashlib
+import json
 import logging
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from src.utils.config import load_default_config
-from src.utils.file_utils import sha256_file, sha256_text
+from src.utils.config import ROOT_DIR, load_default_config
+from src.utils.file_utils import ensure_dir, sha256_file, sha256_text
 
 logger = logging.getLogger("orchestria")
+
+CACHE_DIR = ROOT_DIR / "data" / "cache"
+
+
+# --- Cache disque JSON ---
+
+
+def _get_file_hash(file_path: Path) -> str:
+    """Calcule un hash MD5 combinant le contenu binaire et la date de modification.
+
+    Ce hash sert de clé de cache : si le fichier change (contenu ou mtime),
+    le hash change et le cache est invalidé naturellement.
+    """
+    hasher = hashlib.md5()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            hasher.update(chunk)
+    mtime = str(file_path.stat().st_mtime)
+    hasher.update(mtime.encode("utf-8"))
+    return hasher.hexdigest()
+
+
+def _cache_path_for(file_hash: str) -> Path:
+    """Retourne le chemin du fichier cache JSON pour un hash donné."""
+    return CACHE_DIR / f"{file_hash}.json"
+
+
+def _save_to_cache(file_hash: str, result: "ExtractionResult") -> None:
+    """Sauvegarde un ExtractionResult en JSON dans le cache disque."""
+    try:
+        ensure_dir(CACHE_DIR)
+        data = asdict(result)
+        cache_file = _cache_path_for(file_hash)
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        logger.info(f"[EXTRACTION] Cache sauvegardé pour {result.source_filename} (hash={file_hash[:12]}...)")
+    except Exception as e:
+        logger.warning(f"Impossible de sauvegarder le cache pour {result.source_filename}: {e}")
+
+
+def _load_from_cache(file_hash: str) -> Optional["ExtractionResult"]:
+    """Charge un ExtractionResult depuis le cache disque JSON.
+
+    Returns:
+        L'ExtractionResult reconstitué, ou None si absent/invalide.
+    """
+    cache_file = _cache_path_for(file_hash)
+    if not cache_file.exists():
+        return None
+    try:
+        with open(cache_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        result = ExtractionResult(**data)
+        logger.info(f"[CACHE] Résultat chargé depuis le cache pour {result.source_filename} (hash={file_hash[:12]}...)")
+        return result
+    except Exception as e:
+        logger.warning(f"Cache invalide pour hash={file_hash[:12]}..., suppression : {e}")
+        cache_file.unlink(missing_ok=True)
+        return None
+
+
+def clear_cache(file_path: Path) -> bool:
+    """Invalide le cache d'extraction pour un fichier donné.
+
+    Supprime le fichier JSON correspondant dans data/cache/.
+    Gère silencieusement le cas où le cache n'existe pas.
+
+    Args:
+        file_path: Chemin du fichier dont on veut invalider le cache.
+
+    Returns:
+        True si un fichier cache a été supprimé, False sinon.
+    """
+    try:
+        file_hash = _get_file_hash(file_path)
+        cache_file = _cache_path_for(file_hash)
+        if cache_file.exists():
+            cache_file.unlink()
+            logger.info(f"Cache supprimé pour {file_path.name} (hash={file_hash[:12]}...)")
+            return True
+        logger.debug(f"Pas de cache à supprimer pour {file_path.name}")
+        return False
+    except Exception as e:
+        logger.warning(f"Erreur lors de la suppression du cache pour {file_path.name}: {e}")
+        return False
 
 
 @dataclass
@@ -752,38 +841,61 @@ def extract_text_file(path: Path) -> ExtractionResult:
 
 # --- Routeur principal ---
 
-def extract(path: Path, metadata_store=None) -> ExtractionResult:
+def extract(path: Path, metadata_store=None, force: bool = False) -> ExtractionResult:
     """Extrait le texte d'un fichier selon son extension.
 
     Args:
         path: Chemin du fichier à extraire.
-        metadata_store: Instance optionnelle de MetadataStore pour vérifier le cache.
+        metadata_store: Instance optionnelle de MetadataStore pour vérifier le cache DB.
             Si le fichier est déjà extrait (hash_binary match, status=success), retourne
             un résultat "cached" sans ré-extraction.
+        force: Si True, ignore le cache disque et force une nouvelle extraction.
     """
-    # Vérification cache avant extraction
+    # Vérification cache DB (MetadataStore) avant extraction
     if metadata_store is not None and is_extraction_cached(path, metadata_store):
         return _make_result(
             path, text="", page_count=0, method="cached",
             status="cached",
         )
 
+    # Vérification cache disque JSON (data/cache/)
+    if not force and path.exists():
+        try:
+            file_hash = _get_file_hash(path)
+            cached_result = _load_from_cache(file_hash)
+            if cached_result is not None:
+                return cached_result
+        except Exception as e:
+            logger.debug(f"Erreur vérification cache disque pour {path.name}: {e}")
+
+    # Extraction réelle
     ext = path.suffix.lower()
     if ext == ".pdf":
-        return extract_pdf(path)
+        result = extract_pdf(path)
     elif ext == ".docx":
-        return extract_docx(path)
+        result = extract_docx(path)
     elif ext in (".html", ".htm"):
-        return extract_html(path)
+        result = extract_html(path)
     elif ext in (".xlsx", ".xls", ".csv"):
-        return extract_excel(path)
+        result = extract_excel(path)
     elif ext in (".txt", ".md", ".markdown"):
-        return extract_text_file(path)
+        result = extract_text_file(path)
     else:
         return _make_result(
             path, text="", page_count=0, method="unsupported",
             status="failed", error=f"Format non supporté : {ext}"
         )
+
+    # Sauvegarder en cache disque si l'extraction a réussi
+    if result.status in ("success", "partial") and path.exists():
+        try:
+            file_hash = _get_file_hash(path)
+            _save_to_cache(file_hash, result)
+            logger.info(f"[EXTRACTION] {path.name} extrait avec {result.extraction_method}")
+        except Exception as e:
+            logger.debug(f"Impossible de mettre en cache {path.name}: {e}")
+
+    return result
 
 
 # --- Helpers ---
