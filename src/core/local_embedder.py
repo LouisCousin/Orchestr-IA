@@ -4,6 +4,9 @@ Phase 2.5 : utilise intfloat/multilingual-e5-large via sentence-transformers.
 Produit des vecteurs de dimension 1024, normalisés L2.
 Le modèle supporte 100+ langues dont FR, EN, ES, DE, PT.
 
+Phase 4 (Perf) : détection automatique du device (cuda > mps > cpu),
+                  batch_size augmenté pour exploiter le parallélisme Transformer.
+
 IMPORTANT : Le modèle E5 exige des préfixes différents :
   - Documents : 'passage: '
   - Requêtes  : 'query: '
@@ -20,6 +23,25 @@ DEFAULT_MODEL = "intfloat/multilingual-e5-large"
 DEFAULT_CACHE_DIR = "./models"
 
 
+def _detect_device() -> str:
+    """Détecte le meilleur device disponible pour l'inférence.
+
+    Priorité : CUDA (GPU NVIDIA) > MPS (Apple Silicon) > CPU.
+    """
+    try:
+        import torch
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+        logger.info(f"Device détecté pour embeddings : {device}")
+        return device
+    except ImportError:
+        return "cpu"
+
+
 class LocalEmbedder:
     """Calcul d'embeddings en local avec multilingual-e5-large."""
 
@@ -31,16 +53,18 @@ class LocalEmbedder:
         self._model = None
 
     def _load_model(self):
-        """Charge le modèle de manière paresseuse."""
+        """Charge le modèle de manière paresseuse sur le meilleur device disponible."""
         if self._model is None:
             try:
                 from sentence_transformers import SentenceTransformer
-                logger.info(f"Chargement du modèle d'embeddings : {self._model_name}")
+                device = _detect_device()
+                logger.info(f"Chargement du modèle d'embeddings : {self._model_name} sur {device}")
                 self._model = SentenceTransformer(
                     self._model_name,
                     cache_folder=self._cache_dir,
+                    device=device,
                 )
-                logger.info("Modèle d'embeddings chargé.")
+                logger.info(f"Modèle d'embeddings chargé sur {device}.")
             except ImportError:
                 raise ImportError(
                     "sentence-transformers est requis pour les embeddings locaux. "
@@ -60,12 +84,15 @@ class LocalEmbedder:
         """Réinitialise le singleton (utile pour les tests)."""
         cls._instance = None
 
-    def embed_documents(self, texts: list[str], batch_size: int = 32) -> list[list[float]]:
+    def embed_documents(self, texts: list[str], batch_size: int = 128) -> list[list[float]]:
         """Encode une liste de textes de corpus (avec préfixe 'passage:').
+
+        Phase 4 (Perf) : batch_size augmenté de 32 à 128 pour exploiter le parallélisme
+        des modèles Transformer (10x-50x plus rapide en mode batch vs unitaire).
 
         Args:
             texts: Liste de textes à encoder.
-            batch_size: Taille des lots pour l'inférence.
+            batch_size: Taille des lots pour l'inférence (défaut: 128).
 
         Returns:
             Liste de vecteurs normalisés de dimension 1024.

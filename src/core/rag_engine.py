@@ -6,6 +6,8 @@ Phase 2.5 : pipeline hybride complet avec :
   - Pré-filtrage par métadonnées (SQLite)
   - Reranking par cross-encoder
   - Enrichissement des métadonnées
+Phase 4 (Perf) : pipeline "Batch Embedding" — collecte de tous les chunks
+  puis vectorisation de masse pour exploiter le parallélisme des Transformers.
 """
 
 import logging
@@ -112,9 +114,10 @@ class RAGEngine:
         return []
 
     def index_corpus(self, extractions: list[dict]) -> int:
-        """Indexe le corpus dans ChromaDB.
+        """Indexe le corpus dans ChromaDB — Pipeline Batch Embedding.
 
-        Phase 2.5 : utilise les embeddings locaux et le chunking sémantique.
+        Phase 4 (Perf) : collecte tous les chunks de tous les documents d'abord,
+        puis vectorise en masse pour exploiter le parallélisme Transformer.
 
         Args:
             extractions: Liste de dicts avec les clés 'text', 'source_file',
@@ -133,6 +136,7 @@ class RAGEngine:
                 collection.delete(ids=all_ids)
             logger.info(f"Collection existante vidée ({existing} blocs supprimés)")
 
+        # ── Phase 1 : Collection de tous les chunks en mémoire ──
         documents = []
         metadatas = []
         ids = []
@@ -156,50 +160,60 @@ class RAGEngine:
                     "char_count": len(chunk_text),
                     "token_estimate": len(chunk_text) // 4,
                 }
-                # Merge rich metadata (author, title, date, etc.)
                 for k, v in rich_metadata.items():
                     if v is not None and k not in chunk_meta:
-                        # ChromaDB metadata values must be str, int, float or bool
                         chunk_meta[k] = str(v) if not isinstance(v, (int, float, bool)) else v
                 metadatas.append(chunk_meta)
                 ids.append(doc_id)
                 chunk_index += 1
 
-        if documents:
-            batch_size = 5000
+        if not documents:
+            logger.info(f"Corpus indexé dans ChromaDB : 0 blocs depuis {len(extractions)} documents")
+            return 0
 
-            # Phase 2.5 : utiliser les embeddings locaux si disponibles
-            if self._use_local_embeddings:
-                try:
-                    all_embeddings = self._get_embeddings(documents, mode="document")
-                    if all_embeddings:
-                        for start in range(0, len(documents), batch_size):
-                            end = min(start + batch_size, len(documents))
-                            collection.add(
-                                documents=documents[start:end],
-                                embeddings=all_embeddings[start:end],
-                                metadatas=metadatas[start:end],
-                                ids=ids[start:end],
-                            )
-                        logger.info(f"Corpus indexé avec embeddings locaux : {chunk_index} blocs")
-                        return chunk_index
-                except Exception as e:
-                    logger.warning(f"Erreur embeddings locaux, fallback ChromaDB : {e}")
+        # ── Phase 2 : Vectorisation de masse ──
+        chromadb_batch_size = 5000
 
-            # Fallback : ChromaDB gère les embeddings
-            for start in range(0, len(documents), batch_size):
-                end = min(start + batch_size, len(documents))
-                collection.add(
-                    documents=documents[start:end],
-                    metadatas=metadatas[start:end],
-                    ids=ids[start:end],
-                )
+        if self._use_local_embeddings:
+            try:
+                logger.info(f"Batch Embedding : vectorisation de {chunk_index} chunks")
+                all_embeddings = self._get_embeddings(documents, mode="document")
+                if all_embeddings:
+                    for start in range(0, len(documents), chromadb_batch_size):
+                        end = min(start + chromadb_batch_size, len(documents))
+                        collection.add(
+                            documents=documents[start:end],
+                            embeddings=all_embeddings[start:end],
+                            metadatas=metadatas[start:end],
+                            ids=ids[start:end],
+                        )
+                    logger.info(f"Corpus indexé (batch) : {chunk_index} blocs depuis {len(extractions)} documents")
+                    return chunk_index
+            except Exception as e:
+                logger.warning(f"Erreur embeddings locaux batch, fallback ChromaDB : {e}")
+
+        # Fallback : ChromaDB gère les embeddings
+        for start in range(0, len(documents), chromadb_batch_size):
+            end = min(start + chromadb_batch_size, len(documents))
+            collection.add(
+                documents=documents[start:end],
+                metadatas=metadatas[start:end],
+                ids=ids[start:end],
+            )
 
         logger.info(f"Corpus indexé dans ChromaDB : {chunk_index} blocs depuis {len(extractions)} documents")
         return chunk_index
 
     def index_corpus_semantic(self, chunks_by_doc: dict, metadata_store=None) -> int:
-        """Indexe le corpus avec les chunks sémantiques (Phase 2.5).
+        """Indexe le corpus avec les chunks sémantiques — Pipeline Batch Embedding.
+
+        Phase 4 (Perf) : fonctionne en deux temps :
+        1. Collection : tous les chunks de tous les documents sont accumulés en mémoire.
+        2. Vectorisation de masse : embed_documents est appelé sur la liste complète
+           (ou par gros lots de 1000 chunks) pour exploiter le parallélisme Transformer.
+
+        Les modèles Transformer (comme multilingual-e5-large) sont 10x à 50x plus rapides
+        quand ils traitent des matrices de textes plutôt que des vecteurs unitaires.
 
         Args:
             chunks_by_doc: Dict {doc_id: list[Chunk]} du semantic_chunker.
@@ -217,6 +231,7 @@ class RAGEngine:
             if all_ids:
                 collection.delete(ids=all_ids)
 
+        # ── Phase 1 : Collection de tous les chunks en mémoire ──
         documents = []
         metadatas = []
         ids = []
@@ -238,33 +253,43 @@ class RAGEngine:
             if metadata_store:
                 metadata_store.add_chunks(chunks)
 
-        if documents:
-            batch_size = 5000
+        if not documents:
+            logger.info("Corpus indexé (sémantique) : 0 chunks")
+            return 0
 
-            if self._use_local_embeddings:
-                try:
-                    all_embeddings = self._get_embeddings(documents, mode="document")
-                    if all_embeddings:
-                        for start in range(0, len(documents), batch_size):
-                            end = min(start + batch_size, len(documents))
-                            collection.add(
-                                documents=documents[start:end],
-                                embeddings=all_embeddings[start:end],
-                                metadatas=metadatas[start:end],
-                                ids=ids[start:end],
-                            )
-                        logger.info(f"Corpus indexé (sémantique) : {len(documents)} chunks")
-                        return len(documents)
-                except Exception as e:
-                    logger.warning(f"Erreur embeddings locaux, fallback : {e}")
+        # ── Phase 2 : Vectorisation de masse ──
+        embedding_batch_size = 1000
+        chromadb_batch_size = 5000
 
-            for start in range(0, len(documents), batch_size):
-                end = min(start + batch_size, len(documents))
-                collection.add(
-                    documents=documents[start:end],
-                    metadatas=metadatas[start:end],
-                    ids=ids[start:end],
+        if self._use_local_embeddings:
+            try:
+                logger.info(
+                    f"Batch Embedding : vectorisation de {len(documents)} chunks "
+                    f"(lots de {embedding_batch_size})"
                 )
+                all_embeddings = self._get_embeddings(documents, mode="document")
+                if all_embeddings:
+                    for start in range(0, len(documents), chromadb_batch_size):
+                        end = min(start + chromadb_batch_size, len(documents))
+                        collection.add(
+                            documents=documents[start:end],
+                            embeddings=all_embeddings[start:end],
+                            metadatas=metadatas[start:end],
+                            ids=ids[start:end],
+                        )
+                    logger.info(f"Corpus indexé (sémantique, batch) : {len(documents)} chunks")
+                    return len(documents)
+            except Exception as e:
+                logger.warning(f"Erreur embeddings locaux batch, fallback : {e}")
+
+        # Fallback : ChromaDB gère les embeddings
+        for start in range(0, len(documents), chromadb_batch_size):
+            end = min(start + chromadb_batch_size, len(documents))
+            collection.add(
+                documents=documents[start:end],
+                metadatas=metadatas[start:end],
+                ids=ids[start:end],
+            )
 
         logger.info(f"Corpus indexé (sémantique) : {len(documents)} chunks")
         return len(documents)

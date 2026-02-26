@@ -1,5 +1,11 @@
-"""Acquisition du corpus documentaire depuis fichiers locaux et URLs distantes."""
+"""Acquisition du corpus documentaire depuis fichiers locaux et URLs distantes.
 
+Phase 4 (Perf) : téléchargement asynchrone via aiohttp + aiofiles,
+                  déduplication par URL/nom de fichier avant requête HTTP,
+                  écriture disque non-bloquante.
+"""
+
+import asyncio
 import logging
 import shutil
 import time
@@ -323,6 +329,292 @@ class CorpusAcquirer:
             return report
 
         return self.acquire_urls(urls, report)
+
+    # --- Déduplication ---
+
+    def _is_url_already_downloaded(self, url: str) -> bool:
+        """Vérifie si une URL a déjà été téléchargée dans le corpus.
+
+        Détection par nom de fichier dérivé de l'URL ou par correspondance exacte.
+        """
+        parsed = urlparse(url)
+        url_filename = Path(parsed.path).name if parsed.path else ""
+        if not url_filename:
+            return False
+
+        for existing_file in self.corpus_dir.iterdir():
+            if existing_file.is_file():
+                # Le nom de fichier du corpus est préfixé par un numéro séquentiel
+                # ex: "001_domain_com.pdf" → on compare la partie après le préfixe
+                name_lower = existing_file.name.lower()
+                url_name_lower = url_filename.lower()
+                if url_name_lower and url_name_lower in name_lower:
+                    logger.info(f"Déduplication : {url} déjà présent ({existing_file.name})")
+                    return True
+        return False
+
+    # --- Async Acquisition (aiohttp + aiofiles) ---
+
+    async def acquire_urls_async(
+        self,
+        urls: list[str],
+        report: Optional[AcquisitionReport] = None,
+        max_concurrent: int = 8,
+    ) -> AcquisitionReport:
+        """Télécharge des documents depuis une liste d'URLs de manière asynchrone.
+
+        Utilise aiohttp pour le téléchargement parallèle et aiofiles pour l'écriture
+        disque non-bloquante. Limite le nombre de connexions simultanées via un sémaphore.
+
+        Args:
+            urls: Liste d'URLs à télécharger.
+            report: Rapport d'acquisition existant (optionnel).
+            max_concurrent: Nombre max de téléchargements simultanés (défaut: 8).
+
+        Returns:
+            AcquisitionReport avec le statut de chaque téléchargement.
+        """
+        import aiohttp
+
+        if report is None:
+            report = AcquisitionReport()
+
+        semaphore = asyncio.Semaphore(max_concurrent)
+        headers = {
+            "User-Agent": self.user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept-Encoding": "gzip, deflate",
+        }
+        timeout = aiohttp.ClientTimeout(
+            total=self.connection_timeout + self.read_timeout,
+            connect=self.connection_timeout,
+            sock_read=self.read_timeout,
+        )
+
+        async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
+            tasks = []
+            for url in urls:
+                url = url.strip()
+                if not url:
+                    continue
+                tasks.append(self._download_from_url_async(session, url, semaphore))
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for result in results:
+                if isinstance(result, Exception):
+                    report.add(AcquisitionStatus(
+                        source="unknown", status="ERROR",
+                        message=f"Erreur inattendue : {result}"
+                    ))
+                elif isinstance(result, AcquisitionStatus):
+                    report.add(result)
+
+        return report
+
+    async def _download_from_url_async(
+        self,
+        session,
+        url: str,
+        semaphore: asyncio.Semaphore,
+    ) -> AcquisitionStatus:
+        """Stratégie de téléchargement asynchrone en cascade pour une URL."""
+        async with semaphore:
+            # Déduplication : vérifier si le fichier est déjà dans le corpus
+            if self._is_url_already_downloaded(url):
+                return AcquisitionStatus(
+                    source=url, status="SUCCESS",
+                    message="Déjà présent dans le corpus (déduplication)",
+                )
+
+            parsed = urlparse(url)
+            domain = sanitize_filename(parsed.netloc or "unknown")
+
+            try:
+                # Étape 1 : Détection de lien PDF direct
+                is_pdf = url.lower().endswith(".pdf")
+                if not is_pdf:
+                    try:
+                        async with session.head(url, allow_redirects=True) as head_resp:
+                            content_type = head_resp.headers.get("Content-Type", "").lower()
+                            is_pdf = "application/pdf" in content_type
+                    except Exception:
+                        pass
+
+                if is_pdf:
+                    return await self._download_file_async(session, url, domain, ".pdf")
+
+                # Étape 2 : Télécharger la page et chercher des liens PDF
+                async with session.get(url) as resp:
+                    if resp.status >= 400:
+                        return AcquisitionStatus(
+                            source=url, status="FAILED",
+                            message=f"HTTP {resp.status}"
+                        )
+                    actual_ct = resp.headers.get("Content-Type", "").lower()
+                    body = await resp.read()
+
+                if "application/pdf" in actual_ct:
+                    return await self._save_bytes_async(url, body, domain, ".pdf", "application/pdf")
+
+                if "text/html" in actual_ct:
+                    html_text = body.decode("utf-8", errors="replace")
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(html_text, "html.parser")
+                    for link in soup.find_all("a", href=True):
+                        href = link["href"]
+                        if href.lower().endswith(".pdf"):
+                            from urllib.parse import urljoin
+                            pdf_url = urljoin(url, href)
+                            result = await self._download_file_async(session, pdf_url, domain, ".pdf")
+                            if result.status == "SUCCESS":
+                                return result
+
+                    # Étape 3 : Extraire le contenu textuel de la page HTML
+                    return await self._save_html_as_text_async(url, html_text, domain)
+
+                return AcquisitionStatus(
+                    source=url, status="FAILED",
+                    message=f"Type de contenu non supporté : {actual_ct}"
+                )
+
+            except asyncio.TimeoutError:
+                return AcquisitionStatus(source=url, status="FAILED", message="Timeout")
+            except Exception as e:
+                return AcquisitionStatus(source=url, status="ERROR", message=f"Erreur : {e}")
+
+    async def _download_file_async(self, session, url: str, domain: str, ext: str) -> AcquisitionStatus:
+        """Télécharge un fichier de manière asynchrone avec écriture non-bloquante."""
+        try:
+            async with session.get(url) as resp:
+                if resp.status >= 400:
+                    return AcquisitionStatus(
+                        source=url, status="FAILED",
+                        message=f"HTTP {resp.status}"
+                    )
+                content = await resp.read()
+                content_type = resp.headers.get("Content-Type", "")
+
+            if ext == ".pdf":
+                from src.utils.content_validator import is_valid_pdf_content, is_antibot_page
+                if not is_valid_pdf_content(content):
+                    try:
+                        html_text = content.decode("utf-8", errors="ignore")
+                        if is_antibot_page(html_text, url):
+                            return AcquisitionStatus(
+                                source=url, status="FAILED",
+                                message="Page de protection anti-bot détectée.",
+                            )
+                    except Exception:
+                        pass
+                    return AcquisitionStatus(
+                        source=url, status="FAILED",
+                        message="Le contenu téléchargé n'est pas un PDF valide.",
+                    )
+
+            return await self._save_bytes_async(url, content, domain, ext, content_type)
+
+        except Exception as e:
+            return AcquisitionStatus(source=url, status="FAILED", message=f"Échec téléchargement : {e}")
+
+    async def _save_bytes_async(
+        self, url: str, content: bytes, domain: str, ext: str, content_type: str
+    ) -> AcquisitionStatus:
+        """Sauvegarde du contenu binaire sur disque via aiofiles (non-bloquant)."""
+        try:
+            import aiofiles
+            seq_num = get_next_sequence_number(self.corpus_dir)
+            dest_name = format_sequence_name(seq_num, domain, ext)
+            dest_path = self.corpus_dir / dest_name
+
+            async with aiofiles.open(str(dest_path), "wb") as f:
+                await f.write(content)
+
+            logger.info(f"Fichier téléchargé (async) : {url} → {dest_name}")
+            return AcquisitionStatus(
+                source=url, status="SUCCESS", destination=str(dest_path),
+                message=f"Téléchargé : {dest_name}",
+                content_type=content_type, file_size=len(content),
+            )
+        except ImportError:
+            # Fallback si aiofiles n'est pas disponible
+            seq_num = get_next_sequence_number(self.corpus_dir)
+            dest_name = format_sequence_name(seq_num, domain, ext)
+            dest_path = self.corpus_dir / dest_name
+            dest_path.write_bytes(content)
+            return AcquisitionStatus(
+                source=url, status="SUCCESS", destination=str(dest_path),
+                message=f"Téléchargé : {dest_name}",
+                content_type=content_type, file_size=len(content),
+            )
+
+    async def _save_html_as_text_async(self, url: str, html_content: str, domain: str) -> AcquisitionStatus:
+        """Sauvegarde le contenu textuel d'une page HTML de manière asynchrone."""
+        from src.core.text_extractor import extract_html
+        from src.utils.content_validator import is_antibot_page
+
+        result = extract_html(html_content)
+        if result.status == "success" and result.text.strip():
+            if is_antibot_page(result.text, url):
+                return AcquisitionStatus(
+                    source=url, status="FAILED",
+                    message="Page de protection anti-bot détectée.",
+                )
+
+            try:
+                import aiofiles
+                seq_num = get_next_sequence_number(self.corpus_dir)
+                dest_name = format_sequence_name(seq_num, domain, ".txt")
+                dest_path = self.corpus_dir / dest_name
+
+                async with aiofiles.open(str(dest_path), "w", encoding="utf-8") as f:
+                    await f.write(result.text)
+            except ImportError:
+                seq_num = get_next_sequence_number(self.corpus_dir)
+                dest_name = format_sequence_name(seq_num, domain, ".txt")
+                dest_path = self.corpus_dir / dest_name
+                dest_path.write_text(result.text, encoding="utf-8")
+
+            logger.info(f"Page web extraite (async) : {url} → {dest_name}")
+            return AcquisitionStatus(
+                source=url, status="SUCCESS", destination=str(dest_path),
+                message=f"Contenu web extrait : {dest_name}",
+                content_type="text/html", file_size=len(result.text),
+            )
+
+        return AcquisitionStatus(
+            source=url, status="FAILED",
+            message="Aucun contenu textuel extrait de la page"
+        )
+
+    def acquire_urls_sync_or_async(
+        self, urls: list[str], report: Optional[AcquisitionReport] = None, max_concurrent: int = 8
+    ) -> AcquisitionReport:
+        """Point d'entrée qui utilise l'acquisition async si aiohttp est disponible,
+        sinon fallback sur l'acquisition synchrone.
+
+        Gère automatiquement la boucle d'événements asyncio.
+        """
+        try:
+            import aiohttp  # noqa: F401
+            import aiofiles  # noqa: F401
+        except ImportError:
+            logger.info("aiohttp/aiofiles non disponibles, fallback acquisition synchrone")
+            return self.acquire_urls(urls, report)
+
+        try:
+            loop = asyncio.get_running_loop()
+            # Si on est déjà dans une boucle async (ex: Streamlit), utiliser un thread
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(
+                    asyncio.run,
+                    self.acquire_urls_async(urls, report, max_concurrent)
+                )
+                return future.result()
+        except RuntimeError:
+            return asyncio.run(self.acquire_urls_async(urls, report, max_concurrent))
 
     def close(self):
         """Ferme la session HTTP."""
