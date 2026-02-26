@@ -59,7 +59,7 @@ def render():
                     "Statut": f"{status_icon} {s.status}",
                     "Longueur": len(state.generated_sections.get(s.id, "")),
                 })
-            st.dataframe(pd.DataFrame(section_data), use_container_width=True)
+            st.dataframe(pd.DataFrame(section_data))
 
     st.divider()
 
@@ -129,7 +129,7 @@ def render():
 
             if quality_data:
                 df = pd.DataFrame(quality_data)
-                st.dataframe(df, use_container_width=True)
+                st.dataframe(df)
 
                 # Heatmap-style visualization using bar chart
                 if len(quality_data) > 1:
@@ -151,7 +151,7 @@ def render():
                     "Non fondées": report.get("status_counts", {}).get("NON FONDÉE", 0),
                     "Contredites": report.get("status_counts", {}).get("CONTREDITE", 0),
                 })
-            st.dataframe(pd.DataFrame(fc_data), use_container_width=True)
+            st.dataframe(pd.DataFrame(fc_data))
 
     # NEEDS_SOURCE markers
     from src.core.export_engine import scan_all_sections_for_markers
@@ -173,7 +173,7 @@ def render():
                     "Score moyen": round(cov.get("avg_score", 0), 3),
                     "Blocs pertinents": cov.get("num_relevant_blocks", 0),
                 })
-            st.dataframe(pd.DataFrame(rag_data), use_container_width=True)
+            st.dataframe(pd.DataFrame(rag_data))
 
     st.divider()
 

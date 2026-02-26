@@ -8,6 +8,8 @@ Phase 2.5 : pipeline hybride complet avec :
   - Enrichissement des métadonnées
 Phase 4 (Perf) : pipeline "Batch Embedding" — collecte de tous les chunks
   puis vectorisation de masse pour exploiter le parallélisme des Transformers.
+Phase 5 (Sécurité mémoire) : segmentation RAM par lots de MAX_RAM_BATCH_SIZE
+  pour éviter les OOM sur les très gros corpus (500k+ chunks).
 """
 
 import logging
@@ -16,6 +18,10 @@ from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("orchestria")
+
+# Nombre maximal de chunks gardés en mémoire avant écriture dans ChromaDB.
+# Évite les OOM sur les très gros corpus (500k+ chunks).
+MAX_RAM_BATCH_SIZE = 10_000
 
 
 @dataclass
@@ -113,11 +119,57 @@ class RAGEngine:
         # Fallback : ChromaDB gère les embeddings en interne
         return []
 
-    def index_corpus(self, extractions: list[dict]) -> int:
-        """Indexe le corpus dans ChromaDB — Pipeline Batch Embedding.
+    def _flush_batch(
+        self,
+        collection,
+        documents: list[str],
+        metadatas: list[dict],
+        ids: list[str],
+        chromadb_batch_size: int = 5000,
+    ) -> None:
+        """Vectorise et envoie un lot de chunks dans ChromaDB, puis libère la RAM.
 
-        Phase 4 (Perf) : collecte tous les chunks de tous les documents d'abord,
-        puis vectorise en masse pour exploiter le parallélisme Transformer.
+        Args:
+            collection: Collection ChromaDB cible.
+            documents: Textes des chunks.
+            metadatas: Métadonnées associées.
+            ids: Identifiants des chunks.
+            chromadb_batch_size: Taille des sous-lots pour l'API ChromaDB.
+        """
+        if not documents:
+            return
+
+        if self._use_local_embeddings:
+            try:
+                embeddings = self._get_embeddings(documents, mode="document")
+                if embeddings:
+                    for start in range(0, len(documents), chromadb_batch_size):
+                        end = min(start + chromadb_batch_size, len(documents))
+                        collection.add(
+                            documents=documents[start:end],
+                            embeddings=embeddings[start:end],
+                            metadatas=metadatas[start:end],
+                            ids=ids[start:end],
+                        )
+                    return
+            except Exception as e:
+                logger.warning(f"Erreur embeddings locaux batch, fallback ChromaDB : {e}")
+
+        # Fallback : ChromaDB gère les embeddings
+        for start in range(0, len(documents), chromadb_batch_size):
+            end = min(start + chromadb_batch_size, len(documents))
+            collection.add(
+                documents=documents[start:end],
+                metadatas=metadatas[start:end],
+                ids=ids[start:end],
+            )
+
+    def index_corpus(self, extractions: list[dict]) -> int:
+        """Indexe le corpus dans ChromaDB — Pipeline Batch Embedding + sécurité RAM.
+
+        Phase 4 (Perf) : vectorisation de masse par lots Transformer.
+        Phase 5 (Sécurité mémoire) : les chunks sont traités par lots de
+        MAX_RAM_BATCH_SIZE pour éviter les OOM sur les très gros corpus.
 
         Args:
             extractions: Liste de dicts avec les clés 'text', 'source_file',
@@ -136,11 +188,11 @@ class RAGEngine:
                 collection.delete(ids=all_ids)
             logger.info(f"Collection existante vidée ({existing} blocs supprimés)")
 
-        # ── Phase 1 : Collection de tous les chunks en mémoire ──
-        documents = []
-        metadatas = []
-        ids = []
-        chunk_index = 0
+        # ── Collecte et indexation par lots RAM-safe ──
+        documents: list[str] = []
+        metadatas: list[dict] = []
+        ids: list[str] = []
+        total_indexed = 0
 
         for extraction in extractions:
             text = extraction.get("text", "")
@@ -165,55 +217,34 @@ class RAGEngine:
                         chunk_meta[k] = str(v) if not isinstance(v, (int, float, bool)) else v
                 metadatas.append(chunk_meta)
                 ids.append(doc_id)
-                chunk_index += 1
 
-        if not documents:
-            logger.info(f"Corpus indexé dans ChromaDB : 0 blocs depuis {len(extractions)} documents")
-            return 0
+                # Flush dès que le lot RAM atteint la limite
+                if len(documents) >= MAX_RAM_BATCH_SIZE:
+                    logger.info(
+                        f"Batch Embedding RAM-safe : flush de {len(documents)} chunks "
+                        f"(total indexé : {total_indexed})"
+                    )
+                    self._flush_batch(collection, documents, metadatas, ids)
+                    total_indexed += len(documents)
+                    documents.clear()
+                    metadatas.clear()
+                    ids.clear()
 
-        # ── Phase 2 : Vectorisation de masse ──
-        chromadb_batch_size = 5000
+        # Flush du lot résiduel
+        if documents:
+            logger.info(f"Batch Embedding : flush final de {len(documents)} chunks")
+            self._flush_batch(collection, documents, metadatas, ids)
+            total_indexed += len(documents)
 
-        if self._use_local_embeddings:
-            try:
-                logger.info(f"Batch Embedding : vectorisation de {chunk_index} chunks")
-                all_embeddings = self._get_embeddings(documents, mode="document")
-                if all_embeddings:
-                    for start in range(0, len(documents), chromadb_batch_size):
-                        end = min(start + chromadb_batch_size, len(documents))
-                        collection.add(
-                            documents=documents[start:end],
-                            embeddings=all_embeddings[start:end],
-                            metadatas=metadatas[start:end],
-                            ids=ids[start:end],
-                        )
-                    logger.info(f"Corpus indexé (batch) : {chunk_index} blocs depuis {len(extractions)} documents")
-                    return chunk_index
-            except Exception as e:
-                logger.warning(f"Erreur embeddings locaux batch, fallback ChromaDB : {e}")
-
-        # Fallback : ChromaDB gère les embeddings
-        for start in range(0, len(documents), chromadb_batch_size):
-            end = min(start + chromadb_batch_size, len(documents))
-            collection.add(
-                documents=documents[start:end],
-                metadatas=metadatas[start:end],
-                ids=ids[start:end],
-            )
-
-        logger.info(f"Corpus indexé dans ChromaDB : {chunk_index} blocs depuis {len(extractions)} documents")
-        return chunk_index
+        logger.info(f"Corpus indexé dans ChromaDB : {total_indexed} blocs depuis {len(extractions)} documents")
+        return total_indexed
 
     def index_corpus_semantic(self, chunks_by_doc: dict, metadata_store=None) -> int:
-        """Indexe le corpus avec les chunks sémantiques — Pipeline Batch Embedding.
+        """Indexe le corpus avec les chunks sémantiques — Pipeline Batch Embedding + sécurité RAM.
 
-        Phase 4 (Perf) : fonctionne en deux temps :
-        1. Collection : tous les chunks de tous les documents sont accumulés en mémoire.
-        2. Vectorisation de masse : embed_documents est appelé sur la liste complète
-           (ou par gros lots de 1000 chunks) pour exploiter le parallélisme Transformer.
-
-        Les modèles Transformer (comme multilingual-e5-large) sont 10x à 50x plus rapides
-        quand ils traitent des matrices de textes plutôt que des vecteurs unitaires.
+        Phase 4 (Perf) : vectorisation de masse par lots Transformer.
+        Phase 5 (Sécurité mémoire) : les chunks sont traités par lots de
+        MAX_RAM_BATCH_SIZE pour éviter les OOM sur les très gros corpus.
 
         Args:
             chunks_by_doc: Dict {doc_id: list[Chunk]} du semantic_chunker.
@@ -231,10 +262,11 @@ class RAGEngine:
             if all_ids:
                 collection.delete(ids=all_ids)
 
-        # ── Phase 1 : Collection de tous les chunks en mémoire ──
-        documents = []
-        metadatas = []
-        ids = []
+        # ── Collecte et indexation par lots RAM-safe ──
+        documents: list[str] = []
+        metadatas: list[dict] = []
+        ids: list[str] = []
+        total_indexed = 0
 
         for doc_id, chunks in chunks_by_doc.items():
             for chunk in chunks:
@@ -249,50 +281,30 @@ class RAGEngine:
                 })
                 ids.append(chunk.chunk_id)
 
-            # Stocker dans SQLite aussi
+                # Flush dès que le lot RAM atteint la limite
+                if len(documents) >= MAX_RAM_BATCH_SIZE:
+                    logger.info(
+                        f"Batch Embedding sémantique RAM-safe : flush de {len(documents)} chunks "
+                        f"(total indexé : {total_indexed})"
+                    )
+                    self._flush_batch(collection, documents, metadatas, ids)
+                    total_indexed += len(documents)
+                    documents.clear()
+                    metadatas.clear()
+                    ids.clear()
+
+            # Stocker dans SQLite aussi (par document, indépendant du flush ChromaDB)
             if metadata_store:
                 metadata_store.add_chunks(chunks)
 
-        if not documents:
-            logger.info("Corpus indexé (sémantique) : 0 chunks")
-            return 0
+        # Flush du lot résiduel
+        if documents:
+            logger.info(f"Batch Embedding sémantique : flush final de {len(documents)} chunks")
+            self._flush_batch(collection, documents, metadatas, ids)
+            total_indexed += len(documents)
 
-        # ── Phase 2 : Vectorisation de masse ──
-        embedding_batch_size = 1000
-        chromadb_batch_size = 5000
-
-        if self._use_local_embeddings:
-            try:
-                logger.info(
-                    f"Batch Embedding : vectorisation de {len(documents)} chunks "
-                    f"(lots de {embedding_batch_size})"
-                )
-                all_embeddings = self._get_embeddings(documents, mode="document")
-                if all_embeddings:
-                    for start in range(0, len(documents), chromadb_batch_size):
-                        end = min(start + chromadb_batch_size, len(documents))
-                        collection.add(
-                            documents=documents[start:end],
-                            embeddings=all_embeddings[start:end],
-                            metadatas=metadatas[start:end],
-                            ids=ids[start:end],
-                        )
-                    logger.info(f"Corpus indexé (sémantique, batch) : {len(documents)} chunks")
-                    return len(documents)
-            except Exception as e:
-                logger.warning(f"Erreur embeddings locaux batch, fallback : {e}")
-
-        # Fallback : ChromaDB gère les embeddings
-        for start in range(0, len(documents), chromadb_batch_size):
-            end = min(start + chromadb_batch_size, len(documents))
-            collection.add(
-                documents=documents[start:end],
-                metadatas=metadatas[start:end],
-                ids=ids[start:end],
-            )
-
-        logger.info(f"Corpus indexé (sémantique) : {len(documents)} chunks")
-        return len(documents)
+        logger.info(f"Corpus indexé (sémantique) : {total_indexed} chunks")
+        return total_indexed
 
     def search(self, query: str, top_k: Optional[int] = None) -> RAGResult:
         """Recherche les blocs les plus pertinents pour une requête.

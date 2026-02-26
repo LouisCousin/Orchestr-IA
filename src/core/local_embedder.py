@@ -32,13 +32,17 @@ def _detect_device() -> str:
         import torch
         if torch.cuda.is_available():
             device = "cuda"
+            label = "GPU NVIDIA (CUDA)"
         elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             device = "mps"
+            label = "GPU Apple Silicon (MPS)"
         else:
             device = "cpu"
-        logger.info(f"Device détecté pour embeddings : {device}")
+            label = "CPU"
+        logger.info(f"Utilisation du device d'inférence : {label} ({device.upper()})")
         return device
     except ImportError:
+        logger.info("PyTorch non disponible, utilisation du CPU par défaut")
         return "cpu"
 
 
@@ -58,13 +62,13 @@ class LocalEmbedder:
             try:
                 from sentence_transformers import SentenceTransformer
                 device = _detect_device()
-                logger.info(f"Chargement du modèle d'embeddings : {self._model_name} sur {device}")
+                logger.info(f"Chargement du modèle d'embeddings : {self._model_name} sur {device.upper()}")
                 self._model = SentenceTransformer(
                     self._model_name,
                     cache_folder=self._cache_dir,
                     device=device,
                 )
-                logger.info(f"Modèle d'embeddings chargé sur {device}.")
+                logger.info(f"Modèle d'embedding chargé sur {device.upper()}")
             except ImportError:
                 raise ImportError(
                     "sentence-transformers est requis pour les embeddings locaux. "
